@@ -1,0 +1,19 @@
+{
+  "name": "fantasy",
+  "version": "1.0.0",
+  "description": "A projection engine and draft optimiser for **Imperial Immortals 2026** (ESPN):\r 14-team, full-PPR, snake, no keepers, `QB / 2RB / 2WR / TE / FLEX / K / DST`\r starters over a 15-man roster. Head-to-head, 14 regular-season weeks, six of\r fourteen teams reach a three-week bracket.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}
