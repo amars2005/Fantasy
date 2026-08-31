@@ -105,7 +105,7 @@ def main() -> None:
     rows = []
     for lam in args.lambdas:
         for season in seasons:
-            curves = fit_curves([s for s in span if s < season])
+            curves = fit_curves([s for s in span if s < season], with_se=False)
             got = run(season, lam, args.slot, args.drafts, rng, curves)
             if got:
                 rows.append(got)

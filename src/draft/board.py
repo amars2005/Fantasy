@@ -12,14 +12,27 @@ import polars as pl
 
 from src.config import LEAGUE, SEASON
 from src.draft import persist
+from src.draft.reliability import (
+    DEFAULT_DRAWS, confidence_summary, pick_reliability,
+)
 from src.draft.replacement import add_vor, replacement_levels
 from src.draft.sim_draft import add_calibrated_adp, snake_picks
 from src.draft.tiers import add_tiers
 from src.draft.vona import position_dropoff, vona_table
 from src.ingest.ids import TEAM_NICKNAMES
-from src.project.consensus import project
+from src.project.consensus import draw_projections, fit_curves, project
 from src.features.schedule import add_playoff_lift
 from src.project.kdst import project_kdst
+
+# Kickers and defences are not fitted by the consensus curve, so the bootstrap
+# has nothing to say about them. A quarter of their outcome spread is a
+# stand-in, not a measurement -- it exists so they are not treated as the one
+# certain thing on the board.
+KDST_SE_FRACTION = 0.25
+# Below this share of the board actually varying between draws, the reliability
+# numbers would describe the handful of rows that do carry an error bar rather
+# than the decision, so they are withheld instead.
+MIN_UNCERTAIN_SHARE = 0.5
 
 
 class DraftBoard:
@@ -29,7 +42,15 @@ class DraftBoard:
         self.league = league or LEAGUE
         self.slot = slot
         self.season = season
-        proj = projections if projections is not None else project()
+        # The fitted curves are kept, not just the projections they produced:
+        # the bootstrap refits inside them are what the reliability pass draws
+        # from, and refitting per recommendation would cost seconds per pick.
+        self.curves: dict = {}
+        if projections is None:
+            self.curves = fit_curves()
+            proj = project(season, curves=self.curves)
+        else:
+            proj = projections
         # Kickers and defences must be on the board even though they are barely
         # worth projecting. A pick that cannot be marked desynchronises the pick
         # counter from the real draft, and every "picks until my next turn"
@@ -37,6 +58,9 @@ class DraftBoard:
         try:
             kdst = project_kdst()
             if kdst.height:
+                kdst = kdst.with_columns(
+                    (pl.col("sd") * KDST_SE_FRACTION).alias("proj_se")
+                )
                 proj = pl.concat([proj, kdst], how="diagonal_relaxed")
         except Exception:
             pass
@@ -149,7 +173,34 @@ class DraftBoard:
         )
 
     # --- recommendation ---------------------------------------------------
-    def recommend(self, n: int = 12, n_sims: int = 3000) -> dict:
+    def _reliability(self, board: pl.DataFrame, roster: list[dict], gap: int,
+                     n_draws: int) -> pl.DataFrame | None:
+        """Pick confidence, or None when the board carries no uncertainty.
+
+        A board assembled by hand or from another source may have no `proj_se`
+        and no fitted curves. Reporting 100% confidence in that case would be
+        worse than reporting nothing, so the test is on the draws themselves:
+        unless most of the board actually moves between them, there is no
+        uncertainty here to measure and the answer is "unavailable".
+
+        Checking the inputs instead is not enough. Defences carry a stand-in
+        standard error, which is sufficient to make a board of otherwise
+        certainty-free projections look measurable.
+        """
+        if board.height < 2:
+            return None
+        draws = draw_projections(
+            board, self.curves, n_draws=n_draws, rng=np.random.default_rng(19)
+        )
+        moves = float((draws.std(axis=0) > 1e-9).mean())
+        if moves < MIN_UNCERTAIN_SHARE:
+            return None
+        return pick_reliability(
+            board, roster, gap, draws, self.league, rng=np.random.default_rng(23)
+        )
+
+    def recommend(self, n: int = 12, n_sims: int = 3000,
+                  reliability: bool = True, n_draws: int = DEFAULT_DRAWS) -> dict:
         board = self.available
         roster = self.my_roster
         gap = max(self.picks_until_next(), 1)
@@ -159,6 +210,24 @@ class DraftBoard:
             rng=np.random.default_rng(7),
         )
         dropoff = position_dropoff(table)
+
+        confidence: dict = {"verdict": "unavailable"}
+        if reliability:
+            trust = self._reliability(board, roster, gap, n_draws)
+            if trust is not None:
+                table = table.join(
+                    trust.drop("name", "pos"), on="player_id", how="left"
+                )
+                confidence = confidence_summary(trust)
+                # The single most useful warning the board can give: the pick
+                # changes depending on which plausible projection you believe.
+                by_point = table.sort("vona", descending=True).row(0, named=True)
+                confidence["agrees_with_point_estimate"] = (
+                    by_point["player_id"] == trust.sort(
+                        "vona_mean", descending=True
+                    )["player_id"][0]
+                )
+                confidence["point_estimate_top"] = by_point["name"]
 
         # Tier scarcity: how many players remain in each player's own tier.
         left = board.group_by(["pos", "tier"]).len().rename({"len": "tier_left"})
@@ -185,9 +254,13 @@ class DraftBoard:
             "roster": roster,
             "replacement": {k: round(v, 1) for k, v in replacement_levels(board, self.league).items()},
             "dropoff": dropoff.to_dicts(),
+            "confidence": confidence,
             "recommendations": table.select(
-                ["player_id", "name", "pos", "tm", "adp", "proj_points", "sd",
-                 "tier", "tier_left", "marginal", "next_best", "vona",
-                 "p_survives", "bye", "bye_conflicts", "playoff_lift"]
+                [c for c in (
+                    "player_id", "name", "pos", "tm", "adp", "proj_points", "sd",
+                    "tier", "tier_left", "marginal", "next_best", "vona",
+                    "vona_mean", "vona_sd", "p_best", "p_top3", "regret",
+                    "p_survives", "bye", "bye_conflicts", "playoff_lift",
+                ) if c in table.columns]
             ).head(n).to_dicts(),
         }

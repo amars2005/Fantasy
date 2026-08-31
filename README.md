@@ -26,12 +26,15 @@ python scripts/build_projections.py          # projections + value report
 python scripts/cheatsheet.py --slot 8        # printable fallback (open, print to PDF)
 python -m src.dashboard.app --slot 8         # live draft board -> localhost:8777
 python scripts/draft_plan.py --slot 8        # round-by-round prep
+python scripts/pick_reliability.py --slot 8  # how firm each round's pick actually is
 python scripts/strategy_table.py             # which strategy wins, by slot
-pytest -q                                    # 52 tests
+pytest -q                                    # 80 tests
 
-# Track 2 (needs the thread cap on a low-memory machine)
+# Analysis (needs the thread cap on a low-memory machine)
+POLARS_MAX_THREADS=2 python scripts/eda_yoy.py --write-report
 POLARS_MAX_THREADS=2 python scripts/backtest_model.py
 POLARS_MAX_THREADS=2 python scripts/disagreements.py
+POLARS_MAX_THREADS=2 python scripts/signings_ablation.py --seeds 20
 ```
 
 `--slot` is your draft position (1-14).
@@ -40,9 +43,9 @@ POLARS_MAX_THREADS=2 python scripts/disagreements.py
 
 Type a name, then <kbd>Enter</kbd> to mark them taken by someone else or
 <kbd>Shift</kbd>+<kbd>Enter</kbd> to mark them as yours. The centre panel re-ranks
-instantly (~0.13s). Search matches team nickname and abbreviation as well as
-name, so the defence the room calls "Ravens D/ST" answers to `ravens`, `bal` or
-`baltimore`. Read it in this order:
+in about a fifth of a second. Search matches team nickname and abbreviation as
+well as name, so the defence the room calls "Ravens D/ST" answers to `ravens`,
+`bal` or `baltimore`. Read it in this order:
 
 1. **Position urgency** — what you lose by waiting one round at each position.
    This is the pick signal. If QB urgency is 0, taking a QB is pure waste.
@@ -50,6 +53,9 @@ name, so the defence the room calls "Ravens D/ST" answers to `ravens`, `bal` or
    only good reason to reach.
 3. **VONA** — value over what actually survives to your next pick.
 4. **Survives %** — probability that player lasts until you pick again.
+5. **"X% best" and the cost line in the verdict** — how often this pick wins
+   across plausible projections, and what the runner-up would cost you. When
+   that cost is under a point or two, stop deliberating and take either.
 
 ---
 
@@ -110,6 +116,62 @@ lineup given what you already own. That makes the tool decline a third QB withou
 any hand-written rule, and prices the FLEX slot correctly. VONA subtracts the
 simulated expected best-available at that position when you next pick.
 
+## How much to trust a pick
+
+Every number on the board is an estimate, and the board used to present them as
+though they were not. The recommendation is now re-run a few hundred times on
+different plausible projections, and reports what survives.
+
+Two sources of error, both measured rather than assumed:
+
+- **The curve.** The isotonic fit is bootstrapped 200 times and the refits are
+  kept *whole*, not reduced to a per-rank standard error. Isotonic refits move in
+  correlated blocks -- a draw that pushes RB4 down pushes RB5 with it -- and a
+  shift common to an entire position changes nothing about which player to take
+  within it. Summarising to a standard deviation throws exactly that away.
+- **The ordering.** Each player's ADP is perturbed by his own observed `stdev`
+  and the board re-ranked, because a player the room disagrees about does not
+  have a well-determined positional rank to look up.
+
+That yields two new columns and one new line in the verdict:
+
+| | |
+|---|---|
+| `p_best` | how often this player tops the board across draws |
+| `regret` | what taking him instead of that draw's own best choice costs, in projected points |
+
+**Read `regret`, not `p_best`.** They come apart exactly where it matters. Once
+the top of the board is a plateau, "best" is a lottery between players worth the
+same amount, and 25% confidence with half a point of regret is not a hard
+decision — it is a decision that does not matter. `p_best` says how often a pick
+wins; `regret` says what losing costs.
+
+The board also now says when the two ways of ranking disagree. Sorting by VONA
+at the mean projection and sorting by mean VONA across draws are not the same
+operation, because VONA is a maximum and maxima do not commute with averages.
+When they name different players, the dashboard says so — that disagreement is
+itself the reliability signal.
+
+Two things this deliberately does not claim:
+
+- **It is a lower bound.** It covers error in the fitted curve and in the draft
+  ordering. It cannot cover the market being collectively wrong about a player,
+  which is the largest error of all and is not measurable from this data.
+- **`sd` and `proj_se` are different columns and are not interchangeable.** `sd`
+  (~150 at the top of the RB board) is how far a *season* lands from the curve:
+  it is what risk and upside calculations need. `proj_se` is how far the *curve*
+  would move if the ten seasons behind it had come out differently. Using the
+  first where the second belongs makes every pick look like a coin flip; using
+  the second where the first belongs makes a boom-or-bust player look safe.
+
+A board with no error bars on it reports `verdict: unavailable` rather than 100%
+confidence — the check is on whether the draws actually move, not on whether an
+uncertainty column exists, because kickers and defences carry a stand-in
+standard error that was enough to make a certainty-free board look measured.
+
+The pass costs about 0.08s at 200 draws on a 260-player board, so the board
+still re-ranks in roughly a fifth of a second.
+
 ## Strategy results (slot 8, 600 simulated drafts per policy)
 
 Scored the way the league is actually decided: fourteen head-to-head weeks, top
@@ -155,6 +217,95 @@ Tempting, but: kicker season points have a **year-over-year correlation of
 persistence at all. The K1-to-K14 gap was 62 points in 2025 and is not capturable.
 
 **Take a kicker in the last round.** The unusual tier is not worth chasing.
+
+## What a prior season actually tells you
+
+`scripts/eda_yoy.py` measures this directly over 2015-2025 — 3,488 player-season
+pairs, prior season filtered to 8+ games, next season kept **even when it is a
+zero**. Dropping the zeros is the standard way this analysis gets flattered: 9.6%
+of the sample never played the following season, and they are the outcomes the
+exercise is about. Full tables in [`docs/eda_prior_season.md`](docs/eda_prior_season.md).
+
+Every stat gets three numbers, and the third is the one that matters:
+
+| | |
+|---|---|
+| predictive | Spearman(prior stat, next-season points) |
+| repeatable | Spearman(prior stat, the same stat next season) |
+| incremental | predictive, with the player's prior-season fantasy points partialled out |
+
+A stat can be strongly predictive and carry no information: `points` predicts
+points, and anything correlated with it inherits that for free.
+
+| stat | predictive | repeatable | incremental |
+|---|---:|---:|---:|
+| `points` | +0.657 | +0.661 | — *(the control)* |
+| `ppg` | +0.646 | +0.713 | +0.063 ± 0.018 |
+| **`exp_ppg`** | **+0.638** | **+0.741** | **+0.099 ± 0.015** |
+| `touches_pg` | +0.597 | +0.760 | +0.061 ± 0.021 |
+| `target_share` | +0.553 | +0.683 | +0.049 ± 0.018 |
+| `games` | +0.402 | +0.298 | −0.030 ± 0.017 |
+| `points_oe_pg` | +0.047 | — | −0.038 ± 0.018 |
+
+Five things fall out of it.
+
+- **Expected points is the only feature that clearly adds to last year's box
+  score.** `exp_ppg` — points per game implied by the opportunity a player was
+  actually given — carries +0.099 over prior points, six standard errors from
+  zero and comfortably the largest increment in the table. Everything else in the
+  top half is mostly re-reading the same season.
+- **Opportunity repeats; production does not repeat as well.** `touches_pg`
+  predicts itself at +0.760 and `exp_ppg` at +0.741, against +0.661 for fantasy
+  points. That is the whole case for modelling opportunity, stated as a number.
+- **Availability barely repeats at all.** Games played predicts next season's
+  games at **+0.298** — the weakest self-correlation in the table, and lower than
+  most stats' correlation with a *different* quantity. Splitting the projection
+  into points-per-game × games is right, but the second factor is close to
+  unforecastable, and every stat predicts rate far better than availability
+  (`ppg`: +0.691 against rate, +0.392 against games).
+- **Points over expected regresses, but gently.** The top quintile of
+  prior-season points-over-expected does score the most the following year
+  (9.32 ppg) — because those players are better, not because the luck repeats.
+  Holding prior ppg fixed the partial correlation is **−0.069**: real, negative,
+  and far smaller than the "regression candidate" framing implies. It is a
+  tie-breaker, not a fade signal.
+- **A season two years old is nearly as good as last season.** `ppg` from one
+  season out correlates +0.627 with next-season points; from two seasons out,
+  +0.580 — **93% retained**, on the same (survivor-only) sample. Last season is
+  not special; it is one draw from a stable underlying quality.
+
+### And the spread is enormous
+
+Prior-season points in within-position quintiles, against what happened next:
+
+| quintile | prior | next | sd | p10 | p90 | bust |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 27 | 30 | 54 | 0 | 86 | 49% |
+| 3 | 105 | 89 | 76 | 3 | 198 | 35% |
+| 5 | 242 | 191 | 92 | 71 | 314 | 20% |
+
+*bust = scored under half of last season's total.*
+
+Even the best-informed bucket — players who just scored 242 points — has a
+standard deviation of 92 the following year, a 10th percentile of 71, and a
+one-in-five chance of losing half its production. This is the same number the
+board's `sd` column reports, arrived at from the other direction, and it is why
+the reliability layer exists.
+
+### Age
+
+Change in points per game from one season to the next:
+
+| pos | <24 | 24-26 | 27-29 | 30+ |
+|---|---:|---:|---:|---:|
+| QB | −0.68 | −1.95 | −2.27 | −1.71 |
+| RB | **+0.31** | −1.23 | −2.08 | −2.79 |
+| WR | **+0.12** | −0.90 | −1.71 | −2.90 |
+| TE | −0.03 | −0.38 | −0.73 | −1.47 |
+
+Only under-24 running backs and receivers improve on average, and the decline at
+30+ is worth roughly three points per game at both positions — about 50 points
+over a season. Tight ends age most gently, by a wide margin.
 
 ## Track 2: the ML model, and why it does not ship as the projection
 
@@ -228,6 +379,56 @@ Three hypotheses that were **wrong**:
   between runs (+0.0030 at 20 seeds, −0.0002 at 12). Current-season caches expire
   between runs and shift the feature table, so this is **unproven**.
 
+### New signings, and the leak that nearly sold them
+
+The feature table knew about **vacated** opportunity — targets and carries whose
+owner is no longer on the roster — and nothing about **arrivals**. That is half
+an offseason. A team that loses 120 targets and signs a receiver who saw 140
+somewhere else has opened nothing up, and a team that replaces its quarterback
+with a better one has improved every pass-catcher it already had.
+
+`src/features/roster_churn.py` adds the other half: 21 features covering arriving
+volume at team and position level, the player's own position group net of his own
+arrival, incoming draft capital and cap money spent on the competition, and how
+the current quarterback room's best prior season compares to what the offense
+actually got last year. `scripts/signings_ablation.py` puts them through two
+gates — market-blind signal first, then the ADP edge that decides whether
+anything ships.
+
+**They clear the first gate, narrowly:** within-position rho against next-season
+points goes from **+0.6377 to +0.6413, a gain of +0.0036 ± 0.0009** over 20 seeds
+and five seasons. Real, and small — four standard errors from zero, and about a
+quarter the size of the rank-residual objective that closed the ADP gap. They
+take 13.5% of the model's total gain when offered, led by incoming rookie draft
+capital at the position and the quarterback room.
+
+**But the first version of this measured +0.0150 — four times as much — and all
+of the difference was a leak.**
+
+`nflreadpy.load_rosters` returns a season-level snapshot taken at the *end* of
+the year. A player traded in October is listed with the team that acquired him:
+in 2024, **12.3% of skill players sit on a different team there than they did in
+week one**. Every feature built on roster membership was therefore reading
+midseason transactions on draft day — including `vacated_targets`, which has been
+in the model from the start. Rosters now come from the week-one weekly snapshot
+for completed seasons and fall back to the live roster for the season being
+drafted, which for a season that has not started is the same thing.
+
+| Roster snapshot | without churn | with churn | delta |
+|---|---:|---:|---:|
+| End-of-season (leaking) | +0.6355 | +0.6505 | +0.0150 ± 0.0012 |
+| **Week one (correct)** | **+0.6377** | **+0.6413** | **+0.0036 ± 0.0009** |
+
+Three quarters of the effect was the leak. `--roster-source end-of-season`
+reproduces the bad number, and a test in `tests/test_roster_churn.py` fails the
+build if the roster snapshot ever drifts back.
+
+The signing features stay **behind a flag** (`use_churn=True`) rather than in the
+default model, because clearing a market-blind gate is not the same as beating
+ADP. The gate that decides is `signings_ablation.py --gate market`, and the
+market gate needs historical ADP — see the note in *Known limitations* about
+running it where Fantasy Football Calculator is reachable.
+
 ### Where it ends up
 
 Parity, not victory. The final model scores **+0.0003 ± 0.0013 against ADP** --
@@ -269,11 +470,17 @@ All free, all verified live during the build.
 | nflverse `games.csv` | 2026 schedule **with Vegas spread/total already posted** — 272 games |
 | [FFC ADP API](https://help.fantasyfootballcalculator.com/article/42-adp-rest-api) | live PPR ADP with `stdev`/`high`/`low`; historical to 2012 |
 | `load_ff_rankings()` | FantasyPros consensus (ranks, not points) |
+| nflverse weekly rosters | week-one roster membership — the only snapshot that is knowable on draft day |
 
 ADP data courtesy of [Fantasy Football Calculator](https://fantasyfootballcalculator.com).
 Cached to disk and refreshed at most every 12 hours, per their request.
 
 `nfl_data_py` is deprecated — this uses `nflreadpy`, its replacement.
+
+The ffverse ID crosswalk falls back to `raw.githubusercontent.com` when
+nflreadpy's `github.com/.../raw/` redirect is unavailable. Same repository, same
+file; some networks block one path and not the other, and losing the crosswalk
+silently drops every combine feature.
 
 ## Identity resolution
 
@@ -324,6 +531,16 @@ Stated plainly, because they bound what the output means.
 - **The disagreement flags have not cleared significance** (1.8σ, driven largely
   by one season). Treat them as a prompt to look harder at a player, never as a
   reason to override ADP by several rounds.
+- **Pick confidence is a lower bound.** `p_best` and `regret` propagate error in
+  the fitted curve and in the draft ordering. They cannot propagate the market
+  being wrong about a player, which is the biggest error there is. A 90%
+  confident pick is 90% confident *given that ADP is right about him*.
+- **The signing features have only cleared the market-blind gate.** +0.0036 ±
+  0.0009 rho against next-season points is not the same claim as beating ADP,
+  and they stay behind `use_churn=True` until `signings_ablation.py --gate
+  market` says otherwise. That run needs historical ADP, which only Fantasy
+  Football Calculator supplies; on a network that cannot reach it the gate
+  reports SKIPPED rather than inventing a number.
 - **Low-memory machine.** The feature pipeline needs `POLARS_MAX_THREADS=2` on a
   laptop with ~1 GB free; polars' per-thread arenas will otherwise exhaust it.
 - **The strategy table assumes the projections are true.** It compares policies
@@ -335,6 +552,11 @@ Stated plainly, because they bound what the output means.
   the last two rounds. Take them last.
 - **No injury news.** Anything from the last 24 hours is not in here. Check
   before you draft.
+- **One live source for ADP.** If Fantasy Football Calculator is unreachable on
+  draft morning the board now falls back through the disk cache to the newest
+  committed snapshot in `data/adp_history/`, warning loudly about the date it is
+  using. A stale board is wrong at the margins; no board is worse. Run
+  `scripts/snapshot_adp.py` daily through preseason so that fallback is fresh.
 
 ## Layout
 
@@ -343,14 +565,18 @@ src/
   config.py            LEAGUE settings + scoring rules -- change these, everything follows
   scoring.py           PPR scoring (pure, cross-checked against nflverse)
   ingest/              nflverse loaders, FFC ADP, CFBD college data, cache, ID resolution
-  features/            player-season substrate + the model's feature table
+  features/            player-season substrate, the model's feature table,
+                       roster churn (arrivals, QB room), year-over-year EDA
   models/              LightGBM points-per-game and games-played models
-  project/             actuals, consensus curves, season Monte Carlo
-  draft/               replacement, tiers, VONA, draft simulator, H2H bracket, board state
+  project/             actuals, consensus curves + their bootstrap, season Monte Carlo
+  draft/               replacement, tiers, VONA, pick reliability, draft simulator,
+                       H2H bracket, board state
   dashboard/           stdlib HTTP server + single-page board
-scripts/               build_projections, cheatsheet, draft_plan,
-                       strategy_table, backtest_model, disagreements, rookie_model
-tests/                 52 tests
+scripts/               build_projections, cheatsheet, draft_plan, pick_reliability,
+                       strategy_table, backtest_model, disagreements, rookie_model,
+                       eda_yoy, signings_ablation
+docs/                  eda_prior_season.md -- full year-over-year correlation tables
+tests/                 80 tests
 ```
 
 ## Test coverage
@@ -361,4 +587,12 @@ tests/                 52 tests
 - Draft simulator recovers input ADP after calibration
 - Lineup maths: FLEX allocation, and that a QB2 is worth less than a startable WR3
 - **Leakage guards**: every production feature is verifiably lagged, `ppg_lag1`
-  matches the prior season exactly, and no feature reproduces the target
+  matches the prior season exactly, no feature reproduces the target, and the
+  roster snapshot must match week one — the guard for the end-of-season roster
+  leak that inflated the signing features fourfold
+- **Pick confidence degrades to "unavailable", never to certainty**: a board
+  carrying no error bars reports no confidence rather than 100%
+- **The marginal-value interpolation is exact**: the reliability pass evaluates
+  lineup gain at its kinks and interpolates, and every confidence number is wrong
+  if that is not exact to floating point
+- **A signing is not counted as his own competition**

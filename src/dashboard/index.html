@@ -212,7 +212,10 @@ function renderRecommendations(rows) {
       '<td>' + fmt(r.adp) + '</td>' +
       '<td>' + fmt(r.proj_points, 0) + '<div class="muted">&plusmn;' + fmt(r.sd, 0) + '</div></td>' +
       '<td>' + r.tier + '<div class="muted ' + scarce + '">' + r.tier_left + ' left</div></td>' +
-      '<td class="vona">' + fmt(r.vona) + '</td>' +
+      '<td class="vona">' + fmt(r.vona) +
+        (r.p_best == null ? ''
+          : '<div class="muted">' + (r.p_best * 100).toFixed(0) + '% best</div>') +
+        '</td>' +
       '<td>' + (r.p_survives * 100).toFixed(0) + '%</td>' +
       '<td><button class="mine" onclick="pick(\'' + r.player_id + '\',\'me\')">Mine</button></td>' +
     '</tr>';
@@ -298,9 +301,26 @@ function renderVerdict(s) {
     el('vlabel').textContent = 'You are on the clock — pick ' + s.on_the_clock;
     el('vwho').innerHTML = best.name +
       ' <span class="pos ' + best.pos + '">' + best.pos + '</span>';
-    el('vwhy').textContent =
+    const c = s.confidence || {};
+    let why =
       'VONA ' + fmt(best.vona) + ' · tier ' + best.tier + ' (' + best.tier_left +
       ' left) · ' + (urgent ? urgent.pos + ' is the most urgent position' : '');
+    if (c.verdict && c.verdict !== 'unavailable') {
+      // What the projection error does to this decision. Regret is in projected
+      // points: small regret means the choice is close to free, however
+      // confident or unconfident the percentage looks.
+      why += ' · best in ' + (c.p_best * 100).toFixed(0) + '% of draws';
+      if (c.runner_up) {
+        why += ', ' + c.runner_up + ' costs ' + fmt(c.runner_up_regret) + ' pts';
+      }
+      if (c.verdict === 'coin flip -- take either') {
+        why += ' — coin flip, break the tie on news';
+      }
+    }
+    el('vwhy').innerHTML = c.agrees_with_point_estimate === false
+      ? why + ' <span class="scarce">&#9888; unstable: ' + c.point_estimate_top +
+        ' leads on the point estimate</span>'
+      : why;
   } else {
     const away = s.picks_away;
     el('vlabel').textContent = 'Waiting';

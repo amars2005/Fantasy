@@ -102,7 +102,7 @@ def backtest(seasons: list[int]) -> tuple[pl.DataFrame, dict]:
         anchored, models = predict_points(train_df, evaluated, use_market=True)
 
         # --- residual model: correct the market rather than replace it --------
-        curves = fit_curves([s for s in span if s < year])
+        curves = fit_curves([s for s in span if s < year], with_se=False)
         base_train = _adp_baseline(drafted_train, curves)
         base_score = _adp_baseline(evaluated, curves)
 

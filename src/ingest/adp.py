@@ -7,17 +7,26 @@ cache to disk and honour that cadence rather than polling.
 The `stdev` / `high` / `low` fields are the reason we use this source over a
 plain ranking list: they give the *distribution* of where a player goes, which is
 what pick-survival probability -- and therefore VONA -- is built on.
+
+One live source, one hard dependency: if FFC is unreachable on draft morning
+there is no board at all. `snapshot_adp.py` already archives ADP to
+`data/adp_history/`, and that archive is committed, so it is the natural
+last-resort fallback -- a board built on last week's ADP is wrong at the margins
+and vastly better than no board.
 """
 
 from __future__ import annotations
 
 import json
 import urllib.request
+import warnings
 
 import polars as pl
 
-from src.config import LEAGUE, SEASON
+from src.config import DATA_RAW, LEAGUE, SEASON
 from src.ingest.cache import cached
+
+ARCHIVE = DATA_RAW.parent / "adp_history"
 
 BASE_URL = "https://fantasyfootballcalculator.com/api/v1/adp"
 USER_AGENT = "fantasy-draft-tool/0.1 (personal use)"
@@ -60,22 +69,49 @@ def _fetch(scoring: str, teams: int, year: int) -> pl.DataFrame:
     )
 
 
+def _from_archive(year: int, scoring: str) -> pl.DataFrame:
+    """The most recent committed snapshot for a season, if one exists."""
+    files = sorted(ARCHIVE.glob(f"adp_{scoring}_{year}_*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"no archived ADP snapshot for {year}")
+    frame = pl.read_parquet(files[-1])
+    return frame.select([c for c in frame.columns if c != "snapshot_date"])
+
+
 def load_adp(
     year: int = SEASON,
     scoring: str = "ppr",
     teams: int | None = None,
     refresh: bool = False,
 ) -> pl.DataFrame:
-    """Load ADP for a season. Current season refreshes daily; past seasons never."""
+    """Load ADP for a season. Current season refreshes daily; past seasons never.
+
+    Falls back through disk cache, then the committed snapshot archive. Only a
+    season we have never seen at all raises.
+    """
     teams = teams or LEAGUE["teams"]
     key = f"adp_{scoring}_{teams}_{year}"
     max_age = 12.0 if year >= SEASON else None
-    return cached(
-        key,
-        lambda: _fetch(scoring, teams, year),
-        max_age_hours=max_age,
-        refresh=refresh,
-    )
+    try:
+        return cached(
+            key,
+            lambda: _fetch(scoring, teams, year),
+            max_age_hours=max_age,
+            refresh=refresh,
+        )
+    except Exception as exc:
+        try:
+            frame = _from_archive(year, scoring)
+        except FileNotFoundError:
+            raise exc from None
+        warnings.warn(
+            f"ADP {year}: live fetch and disk cache both unavailable "
+            f"({exc.__class__.__name__}); using archived snapshot "
+            f"as of {frame['adp_as_of'][0]}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return frame
 
 
 def load_adp_history(years: list[int], scoring: str = "ppr") -> pl.DataFrame:

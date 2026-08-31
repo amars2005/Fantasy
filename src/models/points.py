@@ -16,6 +16,11 @@ import lightgbm as lgb
 import numpy as np
 import polars as pl
 
+# Roster churn: who arrived this offseason, what volume they brought, and
+# whether the quarterback room improved. Kept behind a flag (see `use_churn`)
+# until an ablation says it earns its place.
+from src.features.roster_churn import CHURN_FEATURES
+
 FEATURES = [
     # prior production and opportunity
     "ppg_lag1", "points_lag1", "games_lag1", "targets_pg_lag1", "carries_pg_lag1",
@@ -88,7 +93,7 @@ INJURY_FEATURES = [
 
 
 def _matrix(df: pl.DataFrame, use_market: bool = False,
-            use_college: bool = False,
+            use_college: bool = False, use_churn: bool = False,
             drop: tuple[str, ...] = ()) -> tuple[np.ndarray, list[str]]:
     """Feature matrix, built directly from polars to avoid a pandas copy.
 
@@ -99,6 +104,7 @@ def _matrix(df: pl.DataFrame, use_market: bool = False,
         FEATURES
         + (MARKET_FEATURES if use_market else [])
         + (COLLEGE_FEATURES if use_college else [])
+        + (CHURN_FEATURES if use_churn else [])
     )
     feature_list = [f for f in feature_list if f not in drop]
     cols = [c for c in feature_list if c in df.columns]
@@ -117,26 +123,27 @@ def _matrix(df: pl.DataFrame, use_market: bool = False,
 
 def train(train_df: pl.DataFrame, target: str, params: dict | None = None,
           use_market: bool = False, use_college: bool = False,
-          drop: tuple[str, ...] = ()) -> lgb.Booster:
-    x, names = _matrix(train_df, use_market, use_college, drop)
+          use_churn: bool = False, drop: tuple[str, ...] = ()) -> lgb.Booster:
+    x, names = _matrix(train_df, use_market, use_college, use_churn, drop)
     y = train_df[target].to_numpy().astype(float)
     dataset = lgb.Dataset(x, label=y, feature_name=names)
     return lgb.train(params or PARAMS, dataset, num_boost_round=N_ROUNDS)
 
 
 def predict_points(
-    train_df: pl.DataFrame, score_df: pl.DataFrame, use_market: bool = False
+    train_df: pl.DataFrame, score_df: pl.DataFrame, use_market: bool = False,
+    use_churn: bool = False,
 ) -> tuple[np.ndarray, dict[str, lgb.Booster]]:
     """Predict season points as (points per game) x (games played)."""
     fit = train_df.filter(pl.col("y_games") > 0).with_columns(
         (pl.col("y_points") / pl.col("y_games")).alias("y_ppg")
     )
-    ppg_model = train(fit, "y_ppg", use_market=use_market)
+    ppg_model = train(fit, "y_ppg", use_market=use_market, use_churn=use_churn)
 
     # Games is fitted on everyone, including the zeros: not playing is an outcome.
-    games_model = train(train_df, "y_games", use_market=use_market)
+    games_model = train(train_df, "y_games", use_market=use_market, use_churn=use_churn)
 
-    x, _ = _matrix(score_df, use_market)
+    x, _ = _matrix(score_df, use_market, use_churn=use_churn)
     ppg = np.clip(ppg_model.predict(x), 0, None)
     games = np.clip(games_model.predict(x), 0, 17)
     return ppg * games, {"ppg": ppg_model, "games": games_model}
