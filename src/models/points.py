@@ -38,8 +38,12 @@ FEATURES = [
     "vacated_targets", "vacated_carries", "vegas_implied_ppg",
     "changed_team", "is_rookie",
     # role, from the preseason depth chart -- published before week one.
-    # `is_starter` only: `depth_rank` is on two different scales either side of
-    # the 2025 feed change and is not comparable (see features/build.py).
+    # `is_starter` only. `depth_rank` is on two different scales either side of
+    # the 2025 feed change and is not comparable; `was_starter` and
+    # `role_change` are comparable and measured at exactly zero value
+    # (+0.0002 +/- 0.0012 over 20 seeds), so they stay in the feature table for
+    # inspection and out of the model. The promotion effect the EDA measures is
+    # real and is already carried by `is_starter` plus prior production.
     "is_starter",
     # durability, from last season's injury reports
     "inj_weeks_out_lag1", "inj_weeks_questionable_lag1",
@@ -88,6 +92,8 @@ MARKET_FEATURES = ["adp", "adp_stdev"]
 
 
 DEPTH_FEATURES = ["is_starter"]
+# Measured at zero and kept out of FEATURES; named so an audit can find them.
+ROLE_CHANGE_FEATURES = ["was_starter", "role_change"]
 INJURY_FEATURES = [
     "inj_weeks_out_lag1", "inj_weeks_questionable_lag1",
     "inj_weeks_dnp_lag1", "inj_weeks_on_report_lag1",
@@ -96,17 +102,21 @@ INJURY_FEATURES = [
 
 def _matrix(df: pl.DataFrame, use_market: bool = False,
             use_college: bool = False, use_churn: bool = False,
-            drop: tuple[str, ...] = ()) -> tuple[np.ndarray, list[str]]:
+            drop: tuple[str, ...] = (),
+            extra: tuple[str, ...] = ()) -> tuple[np.ndarray, list[str]]:
     """Feature matrix, built directly from polars to avoid a pandas copy.
 
-    `drop` removes named features, which is what makes honest ablation possible:
-    the same code path with and without a feature group.
+    `drop` removes named features and `extra` adds columns that are in the
+    feature table but not in the shipping list. Between them an ablation can
+    test both directions on the same code path, which is what stops "we tried
+    adding it" from meaning something different than "we tried removing it".
     """
     feature_list = (
         FEATURES
         + (MARKET_FEATURES if use_market else [])
         + (COLLEGE_FEATURES if use_college else [])
         + (CHURN_FEATURES if use_churn else [])
+        + list(extra)
     )
     feature_list = [f for f in feature_list if f not in drop]
     cols = [c for c in feature_list if c in df.columns]
@@ -125,8 +135,9 @@ def _matrix(df: pl.DataFrame, use_market: bool = False,
 
 def train(train_df: pl.DataFrame, target: str, params: dict | None = None,
           use_market: bool = False, use_college: bool = False,
-          use_churn: bool = False, drop: tuple[str, ...] = ()) -> lgb.Booster:
-    x, names = _matrix(train_df, use_market, use_college, use_churn, drop)
+          use_churn: bool = False, drop: tuple[str, ...] = (),
+          extra: tuple[str, ...] = ()) -> lgb.Booster:
+    x, names = _matrix(train_df, use_market, use_college, use_churn, drop, extra)
     y = train_df[target].to_numpy().astype(float)
     dataset = lgb.Dataset(x, label=y, feature_name=names)
     return lgb.train(params or PARAMS, dataset, num_boost_round=N_ROUNDS)

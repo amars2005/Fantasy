@@ -28,7 +28,7 @@ python -m src.dashboard.app --slot 8         # live draft board -> localhost:877
 python scripts/draft_plan.py --slot 8        # round-by-round prep
 python scripts/pick_reliability.py --slot 8  # how firm each round's pick actually is
 python scripts/strategy_table.py             # which strategy wins, by slot
-pytest -q                                    # 94 tests
+pytest -q                                    # 95 tests
 
 # Analysis (needs the thread cap on a low-memory machine)
 POLARS_MAX_THREADS=2 python scripts/eda_yoy.py --write-report
@@ -39,6 +39,7 @@ POLARS_MAX_THREADS=2 python scripts/eda_availability.py --write-report
 POLARS_MAX_THREADS=2 python scripts/backtest_model.py
 POLARS_MAX_THREADS=2 python scripts/disagreements.py
 POLARS_MAX_THREADS=2 python scripts/signings_ablation.py --seeds 20
+POLARS_MAX_THREADS=2 python scripts/feature_audit.py --seeds 20
 ```
 
 `--slot` is your draft position (1-14).
@@ -781,6 +782,84 @@ ADP. The gate that decides is `signings_ablation.py --gate market`, and the
 market gate needs historical ADP — see the note in *Known limitations* about
 running it where Fantasy Football Calculator is reachable.
 
+### What the EDA changed about the feature list
+
+`scripts/feature_audit.py` removes one group at a time on the market-blind gate,
+20 seeds, five seasons. Baseline **+0.6400**:
+
+| configuration | rho | delta | verdict |
+|---|---:|---:|---|
+| everything (current) | +0.6400 | — | baseline |
+| − all contract terms | +0.6317 | **−0.0083 ± 0.0013** | hurts to remove |
+| − opportunity churn | +0.6342 | **−0.0058 ± 0.0011** | hurts to remove |
+| − lag2 production | +0.6369 | **−0.0031 ± 0.0011** | hurts to remove |
+| − combine testing | +0.6385 | −0.0015 ± 0.0011 | no effect |
+| − injury history | +0.6389 | −0.0011 ± 0.0010 | no effect |
+| − contract year only | +0.6390 | −0.0010 ± 0.0011 | no effect |
+| **+ role change** | +0.6390 | −0.0010 ± 0.0011 | **no effect** |
+| − quarterback room | +0.6396 | −0.0004 ± 0.0011 | no effect |
+
+Four things fall out of it, and two of them correct something the EDA seemed to
+say.
+
+- **Contract terms are the most valuable group in the model** — but the
+  contract-*year* flag inside them is worth nothing on its own (−0.0010). Cap
+  share and years-remaining carry the whole group, which is exactly what the
+  contract EDA measured (cap share +0.203, contract year −0.006).
+- **The signing features pay** (−0.0058 to remove), and the quarterback-room
+  half of them does not (−0.0004). Two independent methods agreeing: the direct
+  measurement found an eleven-point swing in quarterback quality worth
+  +0.04 ± 0.15 ppg to a returning receiver, and the model finds the same
+  features worth nothing.
+- **I was wrong about lag2.** The year-over-year study found a two-season-old
+  season retains 93% of a one-season-old season's predictive value, and I read
+  that as redundancy. It is not: removing the seven lag2 features costs
+  −0.0031 ± 0.0011. "Still informative on its own" and "adds nothing on top of
+  lag1" are different claims and the decay statistic only supports the first.
+- **The biggest effect in the whole EDA adds nothing to the model.**
+  Promoted-to-starter against still-a-backup is 2.1 points per game at running
+  back. Added as a feature it is worth **−0.0010 ± 0.0011** — zero. The
+  promotion is real; `is_starter` and prior production already carry it. It
+  stays in the feature table for inspection and out of the model.
+
+Measured deltas are conditional on the rest of the list. `feature_fraction=0.7`
+means adding two columns changes how often every other column is sampled, and
+group effects on this many features and this few rows are not additive — the
+same audit run with two extra noise features in place moved two of these deltas
+by 0.002. Read them as "worth keeping / not worth keeping", not as a decomposition.
+
+### So can any of it beat ADP?
+
+Almost certainly not, and the EDA sharpens the reason rather than softening it.
+
+**Everything it found is August-visible.** Depth charts, free-agent signings,
+rookie draft capital, injury reports, contract terms — all published before ADP
+is sampled. A market of thousands of drafters plus expert consensus reads them
+first; a beat report saying a back has been promoted moves ADP within days. The
+only class of information that beats a market is information the market has not
+priced, and nothing in this pipeline qualifies.
+
+**And half the findings cannot move the metric even in principle.** The backtest
+scores within-position rank correlation. The consensus curve is monotone in ADP
+rank, so anything that changes point *levels* without changing their order —
+the scoring-environment drift, the 42-to-73-point availability haircut, the
+recency of the curve — leaves rank correlation *exactly* unchanged by
+construction. Those findings are worth having. They belong to the decision layer:
+replacement level, VOR, VONA, tiers. They are not candidates for beating the
+market at ranking, and running them through that gate would be a category error.
+
+What is left as a ranking candidate is the incremental signal over prior
+production, and the largest such number in the entire study is `exp_ppg` at
+**+0.099 ± 0.015**. The model has had it from the start, and still lands at
++0.0003 ± 0.0013 against ADP.
+
+**The one path that is not closed** is the pair of dead ends recorded above:
+ADP velocity and the closing-line test. Those ask a different question — not
+"do I know something the market does not" but "do I know it *before* the market
+prices it". That is the only shape of edge left on free data, it needs dated ADP
+snapshots, and `snapshot_adp.py` has been collecting them since this was
+written. Ask again next preseason.
+
 ### Where it ends up
 
 Parity, not victory. The final model scores **+0.0003 ± 0.0013 against ADP** --
@@ -927,13 +1006,13 @@ src/
 scripts/               build_projections, cheatsheet, draft_plan, pick_reliability,
                        strategy_table, backtest_model, disagreements, rookie_model,
                        eda_yoy, eda_positions, eda_signings, eda_weekly,
-                       eda_availability, signings_ablation
+                       eda_availability, signings_ablation, feature_audit
 docs/                  eda_prior_season.md      year-over-year correlations
                        eda_position_contract.md scoring environment + contracts
                        eda_signings.md          what an offseason does to a player
                        eda_weekly.md            weekly variance and H2H
                        eda_availability.md      what predicts games played
-tests/                 94 tests
+tests/                 95 tests
 ```
 
 ## Test coverage

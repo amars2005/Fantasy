@@ -408,6 +408,28 @@ def _depth_chart(seasons: list[int]) -> pl.DataFrame:
     return pl.concat(frames).with_columns(pl.col("depth_rank").clip(1, 5))
 
 
+def _prior_role(target_seasons: list[int]) -> pl.DataFrame:
+    """Last preseason's starter status, so a promotion is visible as a change.
+
+    The feature table carried role as a level and not as a move, and the two are
+    different claims: a receiver who has been the starter for three years and one
+    who was promoted in August have the same `is_starter` and very different
+    prior seasons behind them. Both charts are published before their own week
+    one, so nothing here is known later than draft day.
+    """
+    span = [s - 1 for s in target_seasons]
+    prior = _depth_chart(sorted(set(span + target_seasons)))
+    if "is_starter" not in prior.columns:
+        return pl.DataFrame(schema={"player_id": pl.Utf8, "season": pl.Int32})
+    return (
+        prior.select(
+            "player_id", "season", pl.col("is_starter").alias("was_starter")
+        )
+        .with_columns((pl.col("season") + 1).cast(pl.Int32).alias("season"))
+        .unique(subset=["player_id", "season"], keep="first")
+    )
+
+
 def _college_features(draft_years: list[int]) -> pl.DataFrame:
     """College production and usage, keyed by gsis_id.
 
@@ -567,6 +589,7 @@ def build(target_seasons: list[int], stats: pl.DataFrame | None = None,
         .join(_adp(target_seasons), on=["player_id", "season"], how="left")
         .join(_college_features(list(range(lo - 4, hi + 1))), on="player_id", how="left")
         .join(_depth_chart(target_seasons), on=["player_id", "season"], how="left")
+        .join(_prior_role(target_seasons), on=["player_id", "season"], how="left")
         .join(
             _injury_history(list(range(lo, hi + 1))),
             on=["player_id", "season"], how="left",
@@ -585,6 +608,11 @@ def build(target_seasons: list[int], stats: pl.DataFrame | None = None,
             .cast(pl.Int8)
             .alias("changed_team"),
             (pl.col("years_exp") == 0).cast(pl.Int8).alias("is_rookie"),
+            # +1 promoted into the starting group this preseason, -1 demoted out
+            # of it, 0 unchanged. Null where either chart is missing, which the
+            # booster handles natively.
+            (pl.col("is_starter").cast(pl.Int8) - pl.col("was_starter").cast(pl.Int8))
+            .alias("role_change"),
         )
     )
     return spine
