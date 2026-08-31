@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DraftBoard, type Recommendation } from "../lib/board";
+import { applyNews, isEmptyTag, type NewsMap, type NewsTag } from "../lib/news";
 import type { LeagueConfig, Player } from "../lib/types";
+import NewsPanel, { NewsBadge } from "./NewsPanel";
 
 interface Pick {
   seq: number;
@@ -27,6 +29,7 @@ interface LeaguePayload {
 
 const cacheKey = (id: string) => `fantasy.v2.league.${id}`;
 const slotKey = (id: string) => `fantasy.v2.slot.${id}`;
+const newsKey = (id: string) => `fantasy.v2.news.${id}`;
 
 /** Mirror the league locally so a dropped connection does not empty the board. */
 function readCache(id: string): LeaguePayload | null {
@@ -51,6 +54,9 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
   const [picks, setPicks] = useState<Pick[]>([]);
   const [slot, setSlot] = useState(1);
   const [query, setQuery] = useState("");
+  /** What we know that the ADP snapshot does not. Local to this browser. */
+  const [news, setNews] = useState<NewsMap>({});
+  const [editingNews, setEditingNews] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [fromCache, setFromCache] = useState(false);
@@ -89,8 +95,10 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
     try {
       const saved = window.localStorage.getItem(slotKey(leagueId));
       if (saved) setSlot(Number(saved));
+      const savedNews = window.localStorage.getItem(newsKey(leagueId));
+      if (savedNews) setNews(JSON.parse(savedNews) as NewsMap);
     } catch {
-      /* storage blocked */
+      /* storage blocked, or a tag written by an older version */
     }
   }, [leagueId, load]);
 
@@ -111,6 +119,26 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
     }
   }, [leagueId, slot]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(newsKey(leagueId), JSON.stringify(news));
+    } catch {
+      /* storage blocked. The tags still hold for this session. */
+    }
+  }, [leagueId, news]);
+
+  const setTag = useCallback((playerId: string, tag: NewsTag | null) => {
+    setNews((prev) => {
+      const next = { ...prev };
+      // A tag that says nothing is a tag not worth keeping -- it would sit in
+      // the panel implying the board had been adjusted when it had not.
+      if (tag === null || isEmptyTag(tag)) delete next[playerId];
+      else next[playerId] = tag;
+      return next;
+    });
+    if (tag === null) setEditingNews((cur) => (cur === playerId ? null : cur));
+  }, []);
+
   // --- board ----------------------------------------------------------------
 
   const active = useMemo(
@@ -118,16 +146,22 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
     [picks],
   );
 
+  /** The board as re-priced by what we know. Untagged players pass through. */
+  const adjusted = useMemo(
+    () => (league ? applyNews(league.board, news) : []),
+    [league, news],
+  );
+
   const board = useMemo(() => {
     if (!league) return null;
-    const b = new DraftBoard(league.board, league.config, slot, league.teamNicknames ?? {});
+    const b = new DraftBoard(adjusted, league.config, slot, league.teamNicknames ?? {});
     active.forEach((p, i) => {
       // A pick with no player is one we could not identify; the clock still
       // has to move or every "picks until my next turn" number drifts.
       b.draft(p.playerId ?? `__unknown_${i}`, p.takenBy === "me" ? "me" : "other");
     });
     return b;
-  }, [league, slot, active]);
+  }, [league, adjusted, slot, active]);
 
   const recommendation: Recommendation | null = useMemo(
     () => (board ? board.recommend(14) : null),
@@ -290,9 +324,12 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                   <span>
                     <span className={`pos ${p.pos}`}>{p.pos}</span>{" "}
                     <span className="name">{p.name}</span>{" "}
-                    <span className="muted">{p.tm}</span>
+                    <span className="muted">{p.tm}</span> <NewsBadge player={p} />
                   </span>
                   <span style={{ display: "flex", gap: 4 }}>
+                    <button type="button" onClick={() => setEditingNews(p.player_id)}>
+                      News
+                    </button>
                     <button type="button" onClick={() => mark(p.player_id, "other")}>
                       Gone
                     </button>
@@ -313,6 +350,14 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
               </div>
             </div>
           </div>
+
+          <NewsPanel
+            players={adjusted}
+            news={news}
+            editing={editingNews}
+            onEdit={setEditingNews}
+            onChange={setTag}
+          />
 
           <div className="panel">
             <h2>Recent picks</h2>
@@ -422,7 +467,9 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                       (p as Player & { bye_conflicts?: number }).bye_conflicts ?? 0;
                     return (
                       <tr key={p.player_id}>
-                        <td className="name">{p.name}</td>
+                        <td className="name">
+                          {p.name} <NewsBadge player={p} />
+                        </td>
                         <td>
                           <span className={`pos ${p.pos}`}>{p.pos}</span>
                         </td>
@@ -435,6 +482,13 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                         <td className={conflicts ? "scarce" : ""}>{p.bye ?? "-"}</td>
                         <td>
                           <span style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                            <button
+                              type="button"
+                              title="Price in news the ADP snapshot has not caught"
+                              onClick={() => setEditingNews(p.player_id)}
+                            >
+                              News
+                            </button>
                             <button type="button" onClick={() => mark(p.player_id, "other")}>
                               Gone
                             </button>
@@ -511,7 +565,8 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                 ))}
               <div className="hint">
                 ADP as of {league.adpAsOf ?? "unknown"}. Nothing from the last day of
-                injury news is in here.
+                injury news is in here — tag a player under News &amp; risk to price it
+                in yourself.
               </div>
             </div>
           </div>

@@ -349,3 +349,100 @@ kbd {
   font-size: 12px;
   margin-top: 8px;
 }
+
+/* Numbered setup instructions, used by the platform import panels. */
+.steps {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--dim);
+}
+.steps li + li { margin-top: 6px; }
+.steps strong { color: var(--ink); }
+.steps code {
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* --- news & risk ---------------------------------------------------------
+   A tagged player is re-priced, not hidden, so the badge has to travel with
+   him everywhere he appears -- the table, the search results, the panel. */
+
+.newsbadge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  vertical-align: 1px;
+  background: rgba(255, 181, 71, 0.16);
+  color: var(--warn);
+  cursor: help;
+}
+.newsbadge.avoid {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--hot);
+  text-transform: uppercase;
+}
+
+.newsedit {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: #12161c;
+}
+.newshead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.presets button {
+  flex: 1 1 auto;
+  font-size: 11px;
+  padding: 6px 8px;
+}
+.presets button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.checkline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  margin-bottom: 10px;
+}
+.checkline input {
+  width: auto;
+  accent-color: var(--hot);
+}
+
+.newsread {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--dim);
+  border-left: 2px solid var(--warn);
+  padding-left: 9px;
+  margin-bottom: 10px;
+}
+.newsread b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}

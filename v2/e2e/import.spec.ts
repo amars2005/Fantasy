@@ -91,7 +91,9 @@ test.describe("Sleeper", () => {
     await page.getByRole("button", { name: "Import settings" }).click();
 
     await expect(page.getByText(/a_completely_new_key/)).toBeVisible();
-    await expect(page.getByText(/kept their defaults/i)).toBeVisible();
+    // Named, and framed as something the board cannot score -- not as a value
+    // that quietly fell back to a default, which is what it used to say.
+    await expect(page.getByText(/the board cannot score them/i)).toBeVisible();
   });
 
   test("reports a bad league id in language a person can act on", async ({ page }) => {

@@ -1,6 +1,8 @@
 /** Shared shapes. Mirrors `src/config.py` key-for-key so the Python stays the
  *  reference implementation and golden fixtures generate straight from it. */
 
+import type { NewsTag } from "./news";
+
 export type Position = "QB" | "RB" | "WR" | "TE" | "K" | "DST";
 export type Slot = Position | "FLEX" | "SUPERFLEX";
 
@@ -76,6 +78,12 @@ export interface Player {
   tier_size?: number;
   tier_points?: number;
   playoff_lift?: number;
+
+  // Attached by the news layer, when you have told the board something ADP
+  // does not know yet. `proj_points` is already discounted; this is what it
+  // was before, so the board can show its working.
+  news?: NewsTag;
+  proj_before_news?: number;
 
   // Attached per pick by the live board.
   marginal?: number;

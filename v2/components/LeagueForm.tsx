@@ -20,7 +20,12 @@ const HEADLINE_SCORING: { key: string; label: string }[] = [
 export interface LeagueFormProps {
   initial?: { name: string; config: LeagueConfig };
   notice?: string | null;
+  /** Rules worth points that the model could not express. */
   unmapped?: string[];
+  /** Rules the platform returned at zero, so they change nothing. */
+  ignored?: string[];
+  /** Judgement calls the importer made that are worth reviewing. */
+  notes?: string[];
   onSubmit: (name: string, config: LeagueConfig) => Promise<void>;
   submitting: boolean;
   error: string | null;
@@ -30,6 +35,8 @@ export default function LeagueForm({
   initial,
   notice,
   unmapped,
+  ignored,
+  notes,
   onSubmit,
   submitting,
   error,
@@ -39,6 +46,9 @@ export default function LeagueForm({
     initial?.config ?? structuredClone(REFERENCE_LEAGUE),
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // Open by default after an import: those are exactly the values that need a
+  // second pair of eyes, and a collapsed panel is a panel nobody reads.
+  const [showKdst, setShowKdst] = useState(Boolean(initial));
 
   const format = useMemo(() => nearestFfcFormat(config), [config]);
   const warnings = useMemo(() => anchorWarnings(config), [config]);
@@ -51,7 +61,35 @@ export default function LeagueForm({
   const setScoring = (key: string, value: number) =>
     patch({ scoring: { ...config.scoring, [key]: value } });
 
+  const setKicker = (key: string, value: number) =>
+    patch({ kickerScoring: { ...config.kickerScoring, [key]: value } });
+
+  const setDstEvent = (key: string, value: number) =>
+    patch({ dst: { ...config.dst, events: { ...config.dst.events, [key]: value } } });
+
+  const setBand = (
+    which: "pointsAllowedBands" | "yardsAllowedBands",
+    index: number,
+    points: number,
+  ) =>
+    patch({
+      dst: {
+        ...config.dst,
+        [which]: config.dst[which].map((b, i) => (i === index ? { ...b, points } : b)),
+      },
+    });
+
   const starterCount = Object.values(config.starters).reduce((a, b) => a + (b ?? 0), 0);
+
+  // An all-zero ladder is legitimate, but it is also what a drifted id table
+  // would produce, so it is called out rather than left to be discovered later.
+  const kdstAllZero = useMemo(
+    () =>
+      [...config.dst.pointsAllowedBands, ...config.dst.yardsAllowedBands].every(
+        (b) => b.points === 0,
+      ),
+    [config.dst.pointsAllowedBands, config.dst.yardsAllowedBands],
+  );
 
   return (
     <form
@@ -62,10 +100,34 @@ export default function LeagueForm({
     >
       {notice && <div className="banner">{notice}</div>}
       {unmapped && unmapped.length > 0 && (
-        <div className="banner">
-          <strong>Not imported, so these kept their defaults:</strong>{" "}
-          {unmapped.join(", ")}. Check them below before saving.
+        <div className="banner offline">
+          <strong>Worth points here, but the board cannot score them:</strong>
+          <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+            {unmapped.map((u) => (
+              <li key={u}>{u}</li>
+            ))}
+          </ul>
+          <p className="hint" style={{ marginTop: 6 }}>
+            These are almost always small per-play bonuses. Projections will run
+            slightly low for the players who earn them.
+          </p>
         </div>
+      )}
+      {notes && notes.length > 0 && (
+        <div className="banner">
+          {notes.map((n) => (
+            <div key={n}>{n}</div>
+          ))}
+        </div>
+      )}
+      {ignored && ignored.length > 0 && (
+        <details style={{ marginBottom: 12 }}>
+          <summary className="hint" style={{ cursor: "pointer" }}>
+            {ignored.length} more rules your league leaves at zero — they change
+            nothing, but you can check the list.
+          </summary>
+          <p className="hint">{ignored.join(" · ")}</p>
+        </details>
       )}
 
       <div className="panel">
@@ -226,6 +288,101 @@ export default function LeagueForm({
                 <div key={w}>{w}</div>
               ))}
             </div>
+          )}
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Kicker and defence</h2>
+        <div className="body">
+          <p className="hint" style={{ marginTop: 0 }}>
+            These decide where kickers and defences land on the board. An import
+            fills them in, so they are worth a glance even though they move
+            nothing until the last two rounds.
+          </p>
+
+          <button type="button" onClick={() => setShowKdst((v) => !v)}>
+            {showKdst ? "Hide" : "Show"} kicker and defence scoring
+          </button>
+
+          {showKdst && (
+            <>
+              <h3 style={{ fontSize: 13, margin: "16px 0 8px" }}>Field goals</h3>
+              <div className="grid2">
+                {Object.keys(config.kickerScoring).map((key) => (
+                  <div className="field" key={key}>
+                    <label htmlFor={`k-${key}`}>{key.replace(/_/g, " ")}</label>
+                    <input
+                      id={`k-${key}`}
+                      type="number"
+                      step="0.01"
+                      value={config.kickerScoring[key]}
+                      onChange={(e) => setKicker(key, Number(e.target.value))}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <h3 style={{ fontSize: 13, margin: "16px 0 8px" }}>Defensive events</h3>
+              <div className="grid2">
+                {Object.keys(config.dst.events).map((key) => (
+                  <div className="field" key={key}>
+                    <label htmlFor={`d-${key}`}>{key.replace(/_/g, " ")}</label>
+                    <input
+                      id={`d-${key}`}
+                      type="number"
+                      step="0.01"
+                      value={config.dst.events[key]}
+                      onChange={(e) => setDstEvent(key, Number(e.target.value))}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <h3 style={{ fontSize: 13, margin: "16px 0 8px" }}>Points allowed</h3>
+              <div className="grid2">
+                {config.dst.pointsAllowedBands.map((b, i) => (
+                  <div className="field" key={`${b.low}-${b.high}`}>
+                    <label htmlFor={`pa-${i}`}>
+                      {b.high >= 999 ? `${b.low}+` : `${b.low}-${b.high}`}
+                    </label>
+                    <input
+                      id={`pa-${i}`}
+                      type="number"
+                      step="0.5"
+                      value={b.points}
+                      onChange={(e) => setBand("pointsAllowedBands", i, Number(e.target.value))}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <h3 style={{ fontSize: 13, margin: "16px 0 8px" }}>Yards allowed</h3>
+              <div className="grid2">
+                {config.dst.yardsAllowedBands.map((b, i) => (
+                  <div className="field" key={`${b.low}-${b.high}`}>
+                    <label htmlFor={`ya-${i}`}>
+                      {b.high >= 99999 ? `${b.low}+` : `${b.low}-${b.high}`}
+                    </label>
+                    <input
+                      id={`ya-${i}`}
+                      type="number"
+                      step="0.5"
+                      value={b.points}
+                      onChange={(e) => setBand("yardsAllowedBands", i, Number(e.target.value))}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {kdstAllZero && (
+                <p className="hint scarce" style={{ marginTop: 10 }}>
+                  Every points- and yards-allowed band is zero, so defences will
+                  be scored on events alone. That is a real setting in some
+                  leagues — but if yours does score a shutout, fill these in.
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>
