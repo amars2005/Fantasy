@@ -175,3 +175,122 @@ def yoy_frame(
         )
         .drop("_rostered_next")
     )
+
+
+def grouped_slope(
+    df: pl.DataFrame,
+    x: str,
+    y: str,
+    control: str | None = None,
+    groups: tuple[str, ...] = ("season", "pos"),
+) -> dict:
+    """OLS slope of `y` on `x` within (season, position), pooled by group size.
+
+    A correlation says whether an effect exists; a slope says how big it is, in
+    the units the reader cares about -- points per game gained per point of
+    quarterback upgrade, say. `control` is added to the regression rather than
+    partialled out beforehand, which is the same thing and one fewer step to get
+    wrong.
+
+    The standard error is across seasons. That treats a season as the unit of
+    replication, which is right for the season-level shocks (scoring
+    environment, injury luck) but does not account for team-level clustering
+    within a season: a team-level regressor like a quarterback change gives 32
+    values, not 300, and the true error is wider than this reports. Read these
+    slopes as directional.
+    """
+    cols = [x, y, *groups] + ([control] if control else [])
+    sub = df.select([c for c in dict.fromkeys(cols)]).drop_nulls()
+
+    slopes, weights, per_season = [], [], {}
+    for key, chunk in sub.group_by(list(groups)):
+        if chunk.height < MIN_GROUP:
+            continue
+        xv = chunk[x].to_numpy().astype(float)
+        yv = chunk[y].to_numpy().astype(float)
+        if np.ptp(xv) == 0:
+            continue
+
+        columns = [np.ones(len(xv)), xv]
+        if control:
+            cv = chunk[control].to_numpy().astype(float)
+            if np.ptp(cv) == 0:
+                continue
+            columns.append(cv)
+        design = np.column_stack(columns)
+        if np.linalg.matrix_rank(design) < design.shape[1]:
+            continue
+        coef, *_ = np.linalg.lstsq(design, yv, rcond=None)
+
+        slopes.append(float(coef[1]))
+        weights.append(chunk.height)
+        season = key[groups.index("season")] if "season" in groups else 0
+        per_season.setdefault(season, []).append((float(coef[1]), chunk.height))
+
+    if not slopes:
+        return {"slope": float("nan"), "se": float("nan"), "n": 0}
+
+    w = np.array(weights, dtype=float)
+    pooled = float((np.array(slopes) * w).sum() / w.sum())
+    season_means = np.array([
+        float(np.average([v for v, _ in vals], weights=[n for _, n in vals]))
+        for vals in per_season.values()
+    ])
+    se = (
+        float(season_means.std(ddof=1) / np.sqrt(len(season_means)))
+        if len(season_means) > 1 else float("nan")
+    )
+    return {"slope": pooled, "se": se, "n": int(w.sum())}
+
+
+def bucket_effect(
+    df: pl.DataFrame,
+    column: str,
+    outcome: str,
+    control: str | None = None,
+    n_buckets: int = 5,
+    groups: tuple[str, ...] = ("season", "pos"),
+) -> pl.DataFrame:
+    """Mean outcome by within-group quantile of `column`, with a standard error.
+
+    With `control` given, the reported `effect` is the mean *residual* outcome
+    after removing what the control alone predicts, computed within each group.
+    That is what separates "these players scored more" from "these players
+    scored more than their own prior season said they would".
+    """
+    cols = [column, outcome, *groups] + ([control] if control else [])
+    sub = df.select([c for c in dict.fromkeys(cols)]).drop_nulls()
+
+    frames = []
+    for _, chunk in sub.group_by(list(groups)):
+        if chunk.height < MIN_GROUP:
+            continue
+        values = chunk[outcome].to_numpy().astype(float)
+        if control:
+            cv = chunk[control].to_numpy().astype(float)
+            if np.ptp(cv) == 0:
+                continue
+            values = _residualise(values, cv)
+        frames.append(chunk.with_columns(pl.Series("_effect", values)))
+
+    if not frames:
+        return pl.DataFrame()
+
+    pooled = pl.concat(frames)
+    return (
+        pooled.with_columns(
+            (
+                (pl.col(column).rank("ordinal").over(list(groups)) - 1) * n_buckets
+                // pl.len().over(list(groups))
+            ).alias("bucket")
+        )
+        .group_by("bucket")
+        .agg(
+            pl.col(column).mean().alias("level"),
+            pl.col("_effect").mean().alias("effect"),
+            (pl.col("_effect").std() / pl.len().sqrt()).alias("se"),
+            pl.col(outcome).mean().alias("raw"),
+            pl.len().alias("n"),
+        )
+        .sort("bucket")
+    )

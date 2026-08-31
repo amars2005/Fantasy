@@ -317,17 +317,38 @@ def _injury_history(seasons: list[int]) -> pl.DataFrame:
     })
 
 
+# Per-team players the pre-2025 feed lists at `depth_team == 1`, averaged over
+# 2015-2024 and stable to about +/-0.1 across those seasons. The old feed ranks
+# within a *formation slot*, so all three starting receivers are a "1".
+LEGACY_STARTER_RATE = {"QB": 1.01, "RB": 1.48, "WR": 3.04, "TE": 1.24}
+# 2025+ ranks the whole position group instead, 1..15. These cutoffs are the ones
+# whose per-team counts land nearest the rates above, so `is_starter` means the
+# same thing on both sides of the change. Running back is the loose one: the old
+# feed called 1.48 backs per team a starter, which is a committee fudge no cutoff
+# on a strict ordering can reproduce.
+STARTER_RANK = {"QB": 1, "RB": 1, "WR": 3, "TE": 1}
+
+
 def _depth_chart(seasons: list[int]) -> pl.DataFrame:
-    """Preseason depth-chart rank per player-season.
+    """Preseason depth-chart role per player-season.
 
     Role is the strongest available proxy for opportunity, and opportunity is the
     most predictable input in fantasy football -- a WR1 designation is worth far
     more than any amount of prior-season efficiency. This is published before
     week one, so it is legitimately knowable on draft day.
 
-    nflverse changed this feed's schema in 2025: seasons through 2024 carry
-    `depth_team` keyed by week, while 2025 onward carry `pos_rank` keyed by a
-    timestamp. Both are normalised to the same columns here.
+    nflverse changed this feed's schema in 2025, and the two versions are not on
+    the same scale. Through 2024 `depth_team` is the player's slot within a
+    *formation*, capped at 3, so a team fields about three receivers at rank 1.
+    From 2025 `pos_rank` is a strict ordering of the whole position group and
+    runs to 15, so exactly one receiver is rank 1 and the mean jumps from 1.75 to
+    3.59.
+
+    `is_starter` is therefore calibrated per position (see STARTER_RANK) and is
+    the only column here that means the same thing on both sides of the break.
+    `depth_rank` is passed through as the source reports it and is **not**
+    comparable across 2025 -- it is kept for inspection, and `depth_schema` says
+    which feed produced it, but it is deliberately not a model feature.
     """
     import nflreadpy as nfl
 
@@ -348,6 +369,11 @@ def _depth_chart(seasons: list[int]) -> pl.DataFrame:
                         pl.col("gsis_id").alias("player_id"),
                         pl.lit(season).cast(pl.Int32).alias("season"),
                         pl.col("pos_rank").cast(pl.Float64).alias("depth_rank"),
+                        (
+                            pl.col("pos_rank")
+                            <= pl.col("pos_abb").replace_strict(STARTER_RANK, default=1)
+                        ).cast(pl.Int8).alias("is_starter"),
+                        pl.lit("pos_rank").alias("depth_schema"),
                     )
                 )
             else:                               # 2020-2024 schema
@@ -361,23 +387,25 @@ def _depth_chart(seasons: list[int]) -> pl.DataFrame:
                         pl.col("gsis_id").alias("player_id"),
                         pl.lit(season).cast(pl.Int32).alias("season"),
                         "depth_rank",
+                        (pl.col("depth_rank") == 1).cast(pl.Int8).alias("is_starter"),
+                        pl.lit("depth_team").alias("depth_schema"),
                     )
                 )
             return out.unique(subset=["player_id", "season"], keep="first")
 
         try:
-            frames.append(cached(f"depth_rank_{season}", load, max_age_hours=12.0))
+            # Key carries the schema version: the columns this returns changed
+            # when the feed did, and a cache written by the old code would come
+            # back missing them rather than erroring somewhere obvious.
+            frames.append(cached(f"depth_role_v2_{season}", load, max_age_hours=12.0))
         except Exception:
             continue
 
     if not frames:
         return pl.DataFrame(schema={"player_id": pl.Utf8, "season": pl.Int32,
-                                    "depth_rank": pl.Float64})
-    return pl.concat(frames).with_columns(
-        # Starter status is the part that matters; rank 4+ are all "not playing".
-        (pl.col("depth_rank") == 1).cast(pl.Int8).alias("is_starter"),
-        pl.col("depth_rank").clip(1, 5).alias("depth_rank"),
-    )
+                                    "depth_rank": pl.Float64, "is_starter": pl.Int8,
+                                    "depth_schema": pl.Utf8})
+    return pl.concat(frames).with_columns(pl.col("depth_rank").clip(1, 5))
 
 
 def _college_features(draft_years: list[int]) -> pl.DataFrame:

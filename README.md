@@ -28,10 +28,12 @@ python -m src.dashboard.app --slot 8         # live draft board -> localhost:877
 python scripts/draft_plan.py --slot 8        # round-by-round prep
 python scripts/pick_reliability.py --slot 8  # how firm each round's pick actually is
 python scripts/strategy_table.py             # which strategy wins, by slot
-pytest -q                                    # 80 tests
+pytest -q                                    # 83 tests
 
 # Analysis (needs the thread cap on a low-memory machine)
 POLARS_MAX_THREADS=2 python scripts/eda_yoy.py --write-report
+POLARS_MAX_THREADS=2 python scripts/eda_positions.py --write-report
+POLARS_MAX_THREADS=2 python scripts/eda_signings.py --write-report
 POLARS_MAX_THREADS=2 python scripts/backtest_model.py
 POLARS_MAX_THREADS=2 python scripts/disagreements.py
 POLARS_MAX_THREADS=2 python scripts/signings_ablation.py --seeds 20
@@ -307,6 +309,156 @@ Only under-24 running backs and receivers improve on average, and the decline at
 30+ is worth roughly three points per game at both positions — about 50 points
 over a season. Tight ends age most gently, by a wide margin.
 
+## Position, season, and year of contract
+
+[`docs/eda_position_contract.md`](docs/eda_position_contract.md), from
+`scripts/eda_positions.py`.
+
+### The scoring environment is not flat, and it is not flat in the same way
+
+Points at this league's starter cutoffs, per season, on a 17-game-equivalent
+basis. The league went from 16 games to 17 in 2021; a trend fitted to raw totals
+finds that and calls it a change in the scoring environment.
+
+| pos | replacement level | elite-minus-replacement |
+|---|---:|---:|
+| QB | **−1.60** / season | **+5.09** / season |
+| RB | +2.19 / season | +1.47 / season |
+| WR | −0.65 / season | **+4.22** / season |
+| TE | +1.42 / season | −0.59 / season |
+
+**Quarterback and receiver are both getting top-heavier**, and quarterback is
+doing it from both ends: QB14 is drifting *down* about 1.6 points a season while
+the top three pull away at 5.1. That is the rushing-quarterback era showing up in
+a table. Tight end is the flat one — the position has not changed shape in a
+decade.
+
+This matters for the projection: the consensus curve pools 2016-2025, which
+assumes a QB8 in 2017 was worth what a QB8 is worth now. At the top of the QB
+board that assumption is drifting.
+
+### Contract year is a mirage
+
+The naive table is emphatic — players in a contract year score 27.3 points
+against 83.3 for everyone else. It is also worthless:
+
+**82% of contract-year rows are one-year deals.** A player on a minimum contract
+is in the final year of it from the day he signs, so the flag is mostly a marker
+for *fringe roster player*.
+
+Restricting to players with a real prior season (8+ games) and to deals of three
+years or more — the population the folklore is actually about:
+
+| bucket | n | points | pct | prior pct | net |
+|---|---:|---:|---:|---:|---:|
+| not a contract year | 1515 | 135.5 | 0.789 | 0.840 | **+0.008** |
+| contract year | 394 | 107.4 | 0.748 | 0.824 | **−0.006** |
+
+Net of what the player's own prior season predicted, the contract-year effect is
+**−0.006 percentiles**. The partial correlation is −0.082 ± 0.023 holding the
+prior season fixed and −0.106 ± 0.014 holding age fixed, so what little is there
+is not age either. **There is no contract-year bump. If anything it is a small
+penalty.**
+
+What does survive is **cap share**: +0.203 ± 0.022 against the points percentile
+with the prior season held fixed. What a team pays a player predicts his
+production beyond what he did last year — which is why it is already a feature.
+
+### The rookie deal
+
+Within-position points percentile by year of a first contract, rounds 1-3:
+
+| pos | year 1 | year 2 | year 3 | year 4 |
+|---|---:|---:|---:|---:|
+| QB | 0.656 | 0.738 | 0.636 | 0.596 |
+| RB | 0.767 | 0.768 | **0.817** | 0.803 |
+| WR | 0.724 | **0.782** | 0.773 | 0.764 |
+| TE | 0.721 | 0.726 | 0.746 | 0.743 |
+
+Pooled slope **+0.0095 ± 0.0052** percentile per year — 1.8σ, which is not a
+finding. The "year three breakout" is a running-back phenomenon if it is anything
+at all; receivers make their jump in year two, and quarterbacks on rookie deals
+get *worse* after year two.
+
+## What a new signing does to the players already there
+
+[`docs/eda_signings.md`](docs/eda_signings.md), from `scripts/eda_signings.py`.
+2,502 returning player-seasons — same team both years, 8+ games the season
+before (QB 255, RB 654, WR 1,048, TE 545) — so the player and the team are held fixed and only the situation around
+him varies. Everything is net of his own prior-season points per game.
+
+### A better quarterback does almost nothing
+
+| quarterback room | mean change | effect on returning pass-catchers | n |
+|---|---:|---:|---:|
+| big downgrade | −10.93 ppg | **+0.04 ± 0.15** | 284 |
+| small downgrade | −1.57 ppg | +0.05 ± 0.15 | 74 |
+| unchanged | +0.01 ppg | +0.01 ± 0.15 | 1648 |
+| upgrade | +3.47 ppg | **−0.04 ± 0.15** | 241 |
+
+An **eleven-point swing in quarterback quality moves a returning receiver by
+0.04 ± 0.15 points per game** — zero, with the error bars tight enough to rule
+out anything above about a third of a point. Per position: WR +0.009 ± 0.018,
+TE +0.010 ± 0.026, RB +0.000 ± 0.026 ppg per ppg of quarterback upgrade. Simply
+having a different quarterback is worth −0.01 ppg.
+
+This is the most useful null in the whole project, because "they signed a
+quarterback, buy the receivers" is a thing people say in August. The volume goes
+to whoever the offense was going to give it to.
+
+### The depth chart does a great deal
+
+Effect on points per game, net of prior season, against the rest of the position:
+
+| move | RB | WR | TE |
+|---|---:|---:|---:|
+| promoted to starter | **+0.75 ± 0.35** | **+0.58 ± 0.23** | **+0.70 ± 0.24** |
+| starter, stayed | +0.59 ± 0.36 | +0.60 ± 0.23 | +0.37 ± 0.24 |
+| demoted from starter | −0.05 ± 0.36 | −0.14 ± 0.23 | −0.13 ± 0.24 |
+| backup, stayed | **−1.33 ± 0.35** | **−0.79 ± 0.23** | **−0.92 ± 0.24** |
+
+The spread between "promoted" and "still a backup" is **2.1 ppg at running back
+and 1.4 at receiver** — 24 to 36 points over a season, on a player whose own
+prior production is already accounted for. A preseason depth chart is worth more
+than any signing on this page.
+
+### Competition arriving, opportunity leaving
+
+Slope of residual points per game on each roster-churn quantity; bold clears
+twice its standard error:
+
+| what changed | pos | ppg per unit | worth |
+|---|---|---:|---|
+| targets arriving at his position | WR | **−0.0039 ± 0.0007** | 100 arriving targets ≈ −0.39 ppg |
+| targets arriving at his position | TE | **−0.0062 ± 0.0030** | |
+| carries arriving at his position | RB | **−0.0054 ± 0.0017** | 100 arriving carries ≈ −0.54 ppg |
+| targets that left his position | WR | **+0.0051 ± 0.0021** | |
+| draft slot spent on his position | RB | **+0.0052 ± 0.0013** | a first-round RB ≈ −1.5 ppg |
+| draft slot spent on his position | WR | **+0.0029 ± 0.0004** | a first-round WR ≈ −0.8 ppg |
+| net vacated target share | WR | **+2.33 ± 0.44** | 10% of team targets ≈ +0.23 ppg |
+
+The ordering is the point: **who else the team acquired at your position matters,
+and who is throwing you the ball does not.** A rookie running back taken in round
+one costs the incumbent about 1.5 points per game — around 25 over a season, or
+most of a tier.
+
+### And changing teams yourself costs you
+
+| pos | stayed | moved | gap |
+|---|---:|---:|---:|
+| QB | 14.94 | 12.92 | −0.77 ± 0.56 |
+| RB | 8.31 | 6.45 | **−0.68 ± 0.28** |
+| WR | 7.98 | 6.10 | **−0.70 ± 0.19** |
+| TE | 5.75 | 4.72 | −0.23 ± 0.21 |
+
+Net of prior production, a receiver or back who changes teams loses about 0.7
+points per game. Free agency is not, on average, a promotion.
+
+**None of this is causal.** A team that signs a better quarterback also signs
+better receivers, and controlling for last season does not separate them. Every
+number above is an upper bound on what the roster move alone is worth — which
+makes the quarterback null stronger, not weaker.
+
 ## Track 2: the ML model, and why it does not ship as the projection
 
 Built as planned: LightGBM over prior-season production and opportunity, expected
@@ -375,9 +527,40 @@ Three hypotheses that were **wrong**:
 - *Hierarchical decomposition beats direct prediction.* Not as implemented,
   because predicting opportunity × games throws away the ADP anchor. A fair test
   would rebuild it as a residual; it has not been run.
-- *Depth charts are the biggest missing feature.* Its measured effect flips sign
-  between runs (+0.0030 at 20 seeds, −0.0002 at 12). Current-season caches expire
-  between runs and shift the feature table, so this is **unproven**.
+- *Depth charts are the biggest missing feature.* Its measured effect flipped
+  sign between runs (+0.0030 at 20 seeds, −0.0002 at 12) and was recorded as
+  **unproven**. The cause has since been found, and it was not cache expiry —
+  see below.
+
+### Why the depth-chart feature kept changing its mind
+
+nflverse replaced the depth-chart feed in 2025, and the two versions are not on
+the same scale:
+
+| | through 2024 (`depth_team`) | 2025 onward (`pos_rank`) |
+|---|---|---|
+| what it ranks | slot within a *formation* | the whole position group |
+| range | 1-3 | 1-15 |
+| receivers at rank 1 | **3.04 per team** | **1.00 per team** |
+| mean over skill players | 1.75 | 3.59 |
+
+The old feed lists three co-equal WR1s because a team lines up three receivers;
+the new one names a single best receiver. The pipeline was reading both into one
+`depth_rank` column, clipping it to 1-5 and calling it role. A model trained on
+one convention and scored on the other is not being asked the same question, and
+this — not cache expiry — is why the feature's measured value would not hold
+still.
+
+`is_starter` is now calibrated per position, with the 2025+ rank cutoffs chosen
+so the per-team starter count matches the 2015-2024 rate (QB ≤1, RB ≤1, WR ≤3,
+TE ≤1). WR, QB and TE line up across the break to within 0.25 players per team.
+**Running back does not** and cannot: the old feed called 1.48 backs per team a
+starter, which is a committee fudge no cutoff on a strict ordering reproduces.
+
+`depth_rank` itself has been **removed from the model's feature list**. It stays
+in the feature table for inspection, alongside a `depth_schema` column naming the
+feed that produced each row, and a test fails the build if it reappears as a
+feature or if the starter rates drift apart again.
 
 ### New signings, and the leak that nearly sold them
 
@@ -396,14 +579,13 @@ gates — market-blind signal first, then the ADP edge that decides whether
 anything ships.
 
 **They clear the first gate, narrowly:** within-position rho against next-season
-points goes from **+0.6377 to +0.6413, a gain of +0.0036 ± 0.0009** over 20 seeds
-and five seasons. Real, and small — four standard errors from zero, and about a
-quarter the size of the rank-residual objective that closed the ADP gap. They
-take 13.5% of the model's total gain when offered, led by incoming rookie draft
-capital at the position and the quarterback room.
+points goes from **+0.6344 to +0.6400, a gain of +0.0056 ± 0.0010** over 20 seeds
+and five seasons. Real, and small — about a third the size of the rank-residual
+objective that closed the ADP gap. They take 14.0% of the model's total gain when
+offered, led by the quarterback room and incoming rookie draft capital.
 
-**But the first version of this measured +0.0150 — four times as much — and all
-of the difference was a leak.**
+**But the first version of this measured +0.0160 — nearly three times as much —
+and all of the difference was a leak.**
 
 `nflreadpy.load_rosters` returns a season-level snapshot taken at the *end* of
 the year. A player traded in October is listed with the team that acquired him:
@@ -416,10 +598,10 @@ drafted, which for a season that has not started is the same thing.
 
 | Roster snapshot | without churn | with churn | delta |
 |---|---:|---:|---:|
-| End-of-season (leaking) | +0.6355 | +0.6505 | +0.0150 ± 0.0012 |
-| **Week one (correct)** | **+0.6377** | **+0.6413** | **+0.0036 ± 0.0009** |
+| End-of-season (leaking) | +0.6339 | +0.6499 | +0.0160 ± 0.0012 |
+| **Week one (correct)** | **+0.6344** | **+0.6400** | **+0.0056 ± 0.0010** |
 
-Three quarters of the effect was the leak. `--roster-source end-of-season`
+Two thirds of the effect was the leak. `--roster-source end-of-season`
 reproduces the bad number, and a test in `tests/test_roster_churn.py` fails the
 build if the roster snapshot ever drifts back.
 
@@ -535,8 +717,8 @@ Stated plainly, because they bound what the output means.
   the fitted curve and in the draft ordering. They cannot propagate the market
   being wrong about a player, which is the biggest error there is. A 90%
   confident pick is 90% confident *given that ADP is right about him*.
-- **The signing features have only cleared the market-blind gate.** +0.0036 ±
-  0.0009 rho against next-season points is not the same claim as beating ADP,
+- **The signing features have only cleared the market-blind gate.** +0.0056 ±
+  0.0010 rho against next-season points is not the same claim as beating ADP,
   and they stay behind `use_churn=True` until `signings_ablation.py --gate
   market` says otherwise. That run needs historical ADP, which only Fantasy
   Football Calculator supplies; on a network that cannot reach it the gate
@@ -574,9 +756,11 @@ src/
   dashboard/           stdlib HTTP server + single-page board
 scripts/               build_projections, cheatsheet, draft_plan, pick_reliability,
                        strategy_table, backtest_model, disagreements, rookie_model,
-                       eda_yoy, signings_ablation
-docs/                  eda_prior_season.md -- full year-over-year correlation tables
-tests/                 80 tests
+                       eda_yoy, eda_positions, eda_signings, signings_ablation
+docs/                  eda_prior_season.md      year-over-year correlations
+                       eda_position_contract.md scoring environment + contracts
+                       eda_signings.md          what an offseason does to a player
+tests/                 83 tests
 ```
 
 ## Test coverage
@@ -589,7 +773,9 @@ tests/                 80 tests
 - **Leakage guards**: every production feature is verifiably lagged, `ppg_lag1`
   matches the prior season exactly, no feature reproduces the target, and the
   roster snapshot must match week one — the guard for the end-of-season roster
-  leak that inflated the signing features fourfold
+  leak that inflated the signing features threefold
+- **The depth-chart starter flag means the same thing either side of the 2025
+  feed change**, and the raw rank stays out of the model
 - **Pick confidence degrades to "unavailable", never to certainty**: a board
   carrying no error bars reports no confidence rather than 100%
 - **The marginal-value interpolation is exact**: the reliability pass evaluates

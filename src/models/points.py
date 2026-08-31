@@ -37,8 +37,10 @@ FEATURES = [
     # situation
     "vacated_targets", "vacated_carries", "vegas_implied_ppg",
     "changed_team", "is_rookie",
-    # role, from the preseason depth chart -- published before week one
-    "depth_rank", "is_starter",
+    # role, from the preseason depth chart -- published before week one.
+    # `is_starter` only: `depth_rank` is on two different scales either side of
+    # the 2025 feed change and is not comparable (see features/build.py).
+    "is_starter",
     # durability, from last season's injury reports
     "inj_weeks_out_lag1", "inj_weeks_questionable_lag1",
     "inj_weeks_dnp_lag1", "inj_weeks_on_report_lag1",
@@ -85,7 +87,7 @@ N_ROUNDS = 350
 MARKET_FEATURES = ["adp", "adp_stdev"]
 
 
-DEPTH_FEATURES = ["depth_rank", "is_starter"]
+DEPTH_FEATURES = ["is_starter"]
 INJURY_FEATURES = [
     "inj_weeks_out_lag1", "inj_weeks_questionable_lag1",
     "inj_weeks_dnp_lag1", "inj_weeks_on_report_lag1",
@@ -158,7 +160,7 @@ COMPACT_FEATURES = [
     "adp", "adp_stdev",          # the market, and how much it disagrees with itself
     "exp_ppg_lag1",              # opportunity-based expected points
     "ppg_lag1",                  # prior production
-    "depth_rank",                # role
+    "is_starter",                # role
     "contract_cap_pct",          # what the team has invested
     "age",
     "draft_overall",
