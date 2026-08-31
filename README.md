@@ -28,12 +28,14 @@ python -m src.dashboard.app --slot 8         # live draft board -> localhost:877
 python scripts/draft_plan.py --slot 8        # round-by-round prep
 python scripts/pick_reliability.py --slot 8  # how firm each round's pick actually is
 python scripts/strategy_table.py             # which strategy wins, by slot
-pytest -q                                    # 83 tests
+pytest -q                                    # 94 tests
 
 # Analysis (needs the thread cap on a low-memory machine)
 POLARS_MAX_THREADS=2 python scripts/eda_yoy.py --write-report
 POLARS_MAX_THREADS=2 python scripts/eda_positions.py --write-report
 POLARS_MAX_THREADS=2 python scripts/eda_signings.py --write-report
+POLARS_MAX_THREADS=2 python scripts/eda_weekly.py --write-report
+POLARS_MAX_THREADS=2 python scripts/eda_availability.py --write-report
 POLARS_MAX_THREADS=2 python scripts/backtest_model.py
 POLARS_MAX_THREADS=2 python scripts/disagreements.py
 POLARS_MAX_THREADS=2 python scripts/signings_ablation.py --seeds 20
@@ -205,7 +207,9 @@ implied. What survives:
   refusing a QB for eight rounds is also significantly worse. The curve is flat
   then cliffs — Josh Allen and Drake Maye have identical VOR ~17 picks apart, and
   the tier breaks near pick 50. The window is **rounds 4-6**, which is
-  independently where `draft_plan.py` puts QB urgency.
+  independently where `draft_plan.py` puts QB urgency — and independently again
+  where the weekly-variance study lands, since elite quarterbacks boom in 48% of
+  weeks and bust in 3%, the steadiest starter available.
 - **Zero-RB remains a loser here**, though only at 2.1σ.
 
 **Playoff rate is the better metric.** It has less bracket noise in it than title
@@ -458,6 +462,172 @@ points per game. Free agency is not, on average, a promotion.
 better receivers, and controlling for last season does not separate them. Every
 number above is an upper bound on what the roster move alone is worth — which
 makes the quarterback null stronger, not weaker.
+
+## Weekly scoring: what head-to-head actually rewards
+
+[`docs/eda_weekly.md`](docs/eda_weekly.md), from `scripts/eda_weekly.py`. Every
+other analysis here is denominated in season totals, and this league is decided
+by fourteen weekly matchups and a three-week bracket. Those are not the same
+objective.
+
+### Consistency is barely a thing you can draft
+
+Year-over-year correlation of each trait with itself, over 2,490 player-season
+pairs:
+
+| trait | year-over-year rho |
+|---|---:|
+| points per game | +0.703 ± 0.012 |
+| weekly SD, raw | +0.450 ± 0.012 |
+| **weekly SD, net of scoring level** | **+0.125 ± 0.016** |
+| boom rate, net of level | +0.223 ± 0.023 |
+| bust rate, net of level | +0.229 ± 0.010 |
+
+Raw weekly spread looks half-repeatable, but almost all of that is scoring level
+— big scorers have big variance. Strip that out and **"he's inconsistent"
+carries +0.125 into next season**, against +0.703 for how good he is. It is a
+description of last year, not a projection.
+
+Boom and bust rates hold up somewhat better (+0.22), so a player's *shape* is
+slightly stickier than his spread. Not enough to draft on.
+
+### Volatility by position, which does not move
+
+| pos | tier 1 ppg | weekly SD | SD/ppg | boom weeks | bust weeks |
+|---|---:|---:|---:|---:|---:|
+| QB | 20.1 | 7.9 | **0.40** | 48% | 3% |
+| RB | 14.6 | 7.8 | 0.55 | 24% | 11% |
+| WR | 13.9 | 7.9 | 0.58 | 21% | 14% |
+| TE | 10.3 | 6.6 | 0.66 | 10% | 27% |
+
+Elite quarterbacks are by far the steadiest thing you can start — a 48% boom rate
+against a 3% bust rate. That is a separate argument for the round 4-6 QB window
+than the one from replacement level, and it points the same way. At the bottom
+tiers `SD/ppg` exceeds 1.2 at every position: a late-round starter is a coin flip
+wearing a name.
+
+### Teammates' weeks move together, and only in one direction
+
+| pair | correlation |
+|---|---:|
+| QB1 / WR1 | **+0.355 ± 0.015** |
+| QB1 / WR2 | +0.285 ± 0.015 |
+| QB1 / TE1 | +0.268 ± 0.010 |
+| QB1 / RB1 | +0.073 ± 0.013 |
+| WR1 / WR2 | −0.017 ± 0.017 |
+| WR1 / TE1 | −0.007 ± 0.015 |
+| RB1 / WR1 | −0.010 ± 0.012 |
+
+A quarterback and his receivers share a game script. **Two receivers on the same
+team do not** — +0.355 with the passer, −0.017 with each other. They neither
+cannibalise nor amplify one another week to week, which is not what either half
+of the usual argument predicts.
+
+### And variance helps only if you are losing
+
+30 random leagues per season, dealt from the real starter pool and played out on
+real weekly scores — 4,620 synthetic team-seasons. `slope` is the change in win
+rate per extra point of weekly lineup SD, holding the team's scoring edge fixed:
+
+| team | scoring edge | win rate | slope per point of SD |
+|---|---:|---:|---:|
+| well below average | −10.7 | 0.343 | **+0.00178 ± 0.00027** |
+| below average | −5.0 | 0.426 | −0.00020 ± 0.00020 |
+| average | −0.1 | 0.501 | −0.00227 ± 0.00018 |
+| above average | +5.0 | 0.574 | −0.00380 ± 0.00020 |
+| well above average | +12.5 | 0.676 | −0.00449 ± 0.00022 |
+
+The sign flips, monotonically, and the crossover is at about six points below the
+league mean. **Variance is a tax on good teams and a subsidy for bad ones.**
+
+Which finally prices stacking. Pairing your quarterback with his own WR1 adds
+`2·r·sd_QB·sd_WR` = 44 to lineup variance, taking weekly SD from 20.1 to 21.2:
+
+| team | cost of the stack, over 14 weeks |
+|---|---:|
+| well below average | **+0.03 wins** |
+| average | −0.03 wins |
+| well above average | **−0.07 wins** |
+
+Small either way — which is itself the answer. Stack if you like the players;
+it is not worth reaching for, and if your roster is strong it is very slightly
+against you.
+
+## Availability: the half of the projection nobody can forecast
+
+[`docs/eda_availability.md`](docs/eda_availability.md), from
+`scripts/eda_availability.py`. Season points are rate × games, and the
+year-over-year study found games predicts games at only +0.298 — the weakest
+number in that whole table.
+
+### Almost nobody plays a full season
+
+Players who had a real prior season (8+ games):
+
+| pos | mean games | median | 16+ games | under 10 | zero |
+|---|---:|---:|---:|---:|---:|
+| QB | 11.5 | 14 | 36% | 31% | 4% |
+| RB | 10.5 | 12 | 25% | 37% | 9% |
+| WR | 10.6 | 13 | 26% | 36% | 11% |
+| TE | 10.6 | 12 | 18% | 34% | 8% |
+
+**Between a quarter and a third of proven starters play under ten games.** Any
+projection quoted as a season total is already an average over that.
+
+### The injury report does add something — and the sign flips
+
+Correlation with next-season games, before and after holding prior games fixed:
+
+| feature | raw | holding prior games fixed |
+|---|---:|---:|
+| `games_lag1` *(the baseline)* | +0.338 | — |
+| `inj_weeks_out_lag1` | −0.038 | **+0.085 ± 0.024** |
+| `inj_weeks_dnp_lag1` | −0.022 | **+0.074 ± 0.023** |
+| `inj_weeks_on_report_lag1` | +0.048 | **+0.054 ± 0.017** |
+| `inj_weeks_questionable_lag1` | +0.012 | +0.037 ± 0.021 |
+| `age` | — | **−0.092 ± 0.022** |
+
+The flip is the interesting part. Raw, weeks listed *Out* predict slightly fewer
+games next year. **Among players who missed the same number of games, being
+listed Out predicts more.** The likely reading: conditional on the absence, an
+injury explanation is better news than the alternatives — a benching or a lost
+job does not come with a designation, and it does not heal. That is a mechanism
+the model was already using without anyone having checked it.
+
+### A lost season is a warning about the player, not just his body
+
+Players whose prior season was cut short (under 10 games) against those who
+played through, matched on prior points per game:
+
+| pos | effect on next-season games | effect on next-season ppg | same, matched on the season *before* the injury |
+|---|---:|---:|---:|
+| QB | −2.12 ± 0.37 | −1.90 ± 0.45 | **−1.68 ± 0.67** |
+| RB | −2.49 ± 0.31 | −0.79 ± 0.23 | **−1.03 ± 0.36** |
+| WR | −2.27 ± 0.24 | −0.86 ± 0.16 | **−1.54 ± 0.26** |
+| TE | −2.75 ± 0.31 | −0.81 ± 0.16 | **−1.19 ± 0.27** |
+
+The rate column has an obvious objection: a short season measures points per game
+over few games, so the control is noisier for exactly the players being tested,
+and a noisy control regresses them toward the mean on its own. Matching instead
+on the season *before* the injury year — a control the injury cannot have
+contaminated — **makes the effect larger, not smaller**. A lost season really
+does predict a worse player on return, by one to one and a half points per game
+on top of two to three lost games.
+
+### What it costs
+
+For players who were startable the season before (10+ ppg):
+
+| pos | ppg | games | expected points | if he played 17 | lost to availability |
+|---|---:|---:|---:|---:|---:|
+| QB | 14.75 | 12.0 | 177 | 251 | **73** |
+| RB | 12.36 | 12.8 | 158 | 210 | **52** |
+| WR | 12.35 | 13.2 | 163 | 210 | **47** |
+| TE | 11.10 | 13.2 | 146 | 189 | **42** |
+
+Availability takes 40 to 70 points off every projection on the board, before
+anything else happens. It is the single largest haircut in the system and the
+least forecastable.
 
 ## Track 2: the ML model, and why it does not ship as the projection
 
@@ -756,11 +926,14 @@ src/
   dashboard/           stdlib HTTP server + single-page board
 scripts/               build_projections, cheatsheet, draft_plan, pick_reliability,
                        strategy_table, backtest_model, disagreements, rookie_model,
-                       eda_yoy, eda_positions, eda_signings, signings_ablation
+                       eda_yoy, eda_positions, eda_signings, eda_weekly,
+                       eda_availability, signings_ablation
 docs/                  eda_prior_season.md      year-over-year correlations
                        eda_position_contract.md scoring environment + contracts
                        eda_signings.md          what an offseason does to a player
-tests/                 83 tests
+                       eda_weekly.md            weekly variance and H2H
+                       eda_availability.md      what predicts games played
+tests/                 94 tests
 ```
 
 ## Test coverage
@@ -782,3 +955,7 @@ tests/                 83 tests
   lineup gain at its kinks and interpolates, and every confidence number is wrong
   if that is not exact to floating point
 - **A signing is not counted as his own competition**
+- **The EDA helpers measure what they claim**: a partial correlation actually
+  removes its control, a slope is in the units of its inputs, and a bucket
+  effect finds nothing in pure noise — five analysis scripts and every table in
+  `docs/` come out of them

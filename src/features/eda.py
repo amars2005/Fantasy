@@ -294,3 +294,32 @@ def bucket_effect(
         )
         .sort("bucket")
     )
+
+
+def residualise_within(
+    df: pl.DataFrame,
+    y: str,
+    control: str,
+    groups: tuple[str, ...] = ("season", "pos"),
+    alias: str | None = None,
+) -> pl.DataFrame:
+    """Attach `y` with its linear dependence on `control` removed, per group.
+
+    Useful when the residual is itself the quantity of interest rather than one
+    end of a correlation -- "how volatile was this player *for his scoring
+    level*" is a property you then want to track from one season to the next.
+    """
+    alias = alias or f"{y}_resid"
+    frames = []
+    for _, chunk in df.group_by(list(groups)):
+        values = chunk[y].to_numpy().astype(float)
+        cv = chunk[control].to_numpy().astype(float)
+        if chunk.height < MIN_GROUP or np.ptp(cv) == 0:
+            frames.append(chunk.with_columns(pl.lit(None, pl.Float64).alias(alias)))
+            continue
+        frames.append(
+            chunk.with_columns(pl.Series(alias, _residualise(values, cv)))
+        )
+    return pl.concat(frames) if frames else df.with_columns(
+        pl.lit(None, pl.Float64).alias(alias)
+    )
