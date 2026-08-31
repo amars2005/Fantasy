@@ -8,3 +8,11 @@ node_modules/
 
 # Secrets - never commit
 .env
+
+# v2 web app
+v2/node_modules/
+v2/.next/
+v2/.data/
+data/v2_export/
+v2/test-results/
+v2/playwright-report/

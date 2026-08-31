@@ -1,0 +1,96 @@
+# Daily refresh of the static bundle the v2 app reads.
+#
+# This runs in Actions rather than as a Vercel cron because it needs nflverse
+# downloads and the full parquet cache -- gigabytes of working set and minutes
+# of runtime, which is a build environment, not a serverless function.
+#
+# The job publishes only on full success. A partial bundle is worse than a stale
+# one: stale ADP is visibly dated in the UI, whereas a half-written bundle would
+# parse cleanly and be silently wrong.
+
+name: Refresh draft bundle
+
+on:
+  schedule:
+    # Early morning UK time, after Fantasy Football Calculator's daily update.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bundle
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install nflreadpy polars scikit-learn numpy pytest
+
+      # The nflverse pull is the slow part and completed seasons never change.
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: nflverse-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: nflverse-${{ runner.os }}-
+
+      - name: Guard the existing pipeline
+        # The bundle is derived from `src/`, so if the reference implementation
+        # is broken the export is not to be trusted either.
+        run: POLARS_MAX_THREADS=2 python -m pytest -q
+
+      - name: Export bundle
+        run: POLARS_MAX_THREADS=2 python scripts/export_v2_bundle.py
+
+      - name: Regenerate golden fixtures
+        run: POLARS_MAX_THREADS=2 python scripts/export_golden.py
+
+      - name: Check the TypeScript still agrees with Python
+        # Fixtures move with the ADP, so this is where a drift between the two
+        # implementations surfaces -- before anything is published.
+        working-directory: v2
+        run: |
+          npm ci
+          npm test
+
+      - name: End-to-end
+        # The browser suite catches what the unit tests structurally cannot:
+        # anything that depends on wiring rather than on a function's return
+        # value. It found a board constructed without its nickname table, and a
+        # store that lost a pick when two were in flight at once.
+        working-directory: v2
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+
+      - name: Upload the report when the browser suite fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: v2/playwright-report
+          retention-days: 7
+
+      - name: Publish to Blob
+        if: success() && env.BLOB_READ_WRITE_TOKEN != ''
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        working-directory: v2
+        run: node scripts/publish-bundle.mjs
+
+      - name: Upload bundle as an artifact
+        # Always useful, and the fallback when Blob is not configured.
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-bundle
+          path: data/v2_export
+          retention-days: 14

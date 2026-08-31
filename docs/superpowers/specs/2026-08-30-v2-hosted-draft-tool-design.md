@@ -88,9 +88,13 @@ to Vercel Blob:
   points) for 2016-2025, covering every key referenced by `SCORING`, with the
   three `FUMBLE_LOST_COLUMNS` pre-summed into one `fumbles_lost`. ~7k rows. This
   is what makes arbitrary scoring possible without re-running Python.
-- **`adp_<scoring>_<teams>`** — per FFC format: current-season ADP with
-  `stdev`/`high`/`low`/`bye`, historical positional-rank ADP for the fit's
-  x-axis, and the precomputed calibrated `adp_mu`.
+- **`board_<scoring>`** — per FFC scoring format: current-season ADP with
+  `stdev`/`bye`, positional rank, and the precomputed calibrated `adp_mu`.
+  Resolved to nflverse ids here, and including the K/DST rows.
+- **`training_<scoring>`** — historical drafted player-seasons, *pre-joined*:
+  positional ADP rank alongside the raw stat components. Identity resolution
+  stays in Python, where `src/ingest/ids.py` already solves it and the tests
+  already guard it; the browser never needs the crosswalk.
 - **`kdst_components`** — per player-season kicker banded FG/PAT counts, and per
   team-game DST event counts plus `points_allowed` and `yards_allowed`. Per-game
   granularity is required because DST bands are non-linear and cannot be
@@ -177,10 +181,12 @@ wrong number on a review screen rather than a silently wrong board.
 
 ### ADP anchoring
 
-FFC serves `teams in {8,10,12,14}` and
-`scoring in {standard, ppr, half-ppr, 2qb, dynasty}`. Select nearest: teams to
-the closest available value; scoring classified by the `receptions` value
-(0 / ~0.5 / ~1.0), overridden to `2qb` when the roster permits two starting QBs.
+FFC serves four usable scoring formats. Team count is **not** a dimension:
+the API ignores its own `teams` parameter (see Implementation findings), so
+selection is by scoring alone -- classified on the `receptions` value
+(0 / ~0.5 / ~1.0), overridden to `2qb` when the roster permits two starting
+quarterbacks. Team count still drives replacement level, snake order and VONA;
+it just cannot change the market ordering being anchored to.
 
 The resulting error is narrow and worth stating precisely. The isotonic fit's
 *y-axis* is already the league's own scoring, so projected points are correct.
@@ -390,6 +396,53 @@ scripts/
 src/                  unchanged
 ```
 
+## Implementation findings
+
+Recorded because each one changed the design, and three of them contradict what
+this document originally said.
+
+**FFC ignores the `teams` query parameter.** Verified 2026-08-30: fetching
+`teams=12` and `teams=14` in the same minute returns byte-identical ADP for all
+271 players, on every scoring format, and the same holds for every historical
+season. This is the same class of finding the README already records about date
+parameters. The format matrix is therefore 4, not 20, and this document's
+earlier claim that a 12-team league gets genuinely different ADP was wrong.
+
+**Dynasty is unusable.** The endpoint returns 11 players. Excluded.
+
+**The stat-component premise is exact.** Applying `SCORING` to the exported
+components reproduces `src/project/actuals.season_totals` for all 1,716
+player-seasons with a maximum difference of 0.000000, and the curves fitted from
+them match `consensus.fit_curves()` to 0.000000 across mean, spread and games
+for all four positions. Arbitrary per-league scoring costs nothing in fidelity.
+
+**SUPERFLEX is an extension, not a port.** `src/draft/replacement.py` reads only
+the FLEX slot, so a superflex league would not count that slot in replacement
+level -- and quarterback value is the one thing that format changes. v2
+implements it in both TypeScript and the fixture generator, and
+`_check_extension_is_noop` proves it reproduces `src/` exactly for any league
+without a SUPERFLEX slot, so existing behaviour is untouched. The effect is
+large and correct: in a 12-team superflex league with 6-point passing
+touchdowns, Josh Allen carries 177.3 VOR against the top running back's 115.8,
+where the reference league has him 20th most valuable.
+
+**Rounding is the one place the two implementations cannot fully agree.**
+polars rounds half-to-even on the *scaled* value (14.25 -> 14.2, 14.35 -> 14.4),
+which is neither `Math.round` nor round-half-away-from-zero; `roundTo` in
+`v2/lib/bundle.ts` reproduces it. But a fitted value can land exactly on a tie,
+where a 1e-14 difference in float summation order flips it by 0.1 and that flip
+propagates into VOR and tier boundaries. Matching sklearn's Cython accumulation
+bit-for-bit is not realistically achievable, so the fixtures carry *unrounded*
+values, agreement is asserted on those, and rounded comparisons exempt the tie
+set. Ties are tracked per quantity: projected points tie rarely (0-8 per board)
+and matter; games played ties constantly (10-14) and matters to nobody, being
+fitted on small integers so pooled means land on a quarter; spread never ties.
+
+**One tier per kicker and defence is correct.** Those curves are fitted on
+finish rank over ten seasons of ~32 teams, which separates nearly every rank.
+The degeneracy guard is therefore scoped to skill positions, where a tier per
+player really would mean the fit had stopped pooling.
+
 ## Carried-forward limitations
 
 These are properties of the projection method, not of the hosting, and remain
@@ -420,7 +473,6 @@ independently verifiable, each leaving the tree working:
    hazards live and it should not be rushed.
 3. **App shell: config, setup, persistence.** Next.js, Drizzle schema, the
    manual config form, Tier 2 derivation, league creation and recovery list.
-   Sleeper and ESPN import excluded.
 4. **Draft board UI + cheatsheet export.** Port `index.html`, wire optimistic
    picks and reconciliation, offline mirroring, and the static cheatsheet
    download.
