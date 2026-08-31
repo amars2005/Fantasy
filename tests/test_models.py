@@ -75,3 +75,16 @@ def test_dropping_features_changes_the_matrix_width():
     less, names_less = _matrix(df, use_market=True, drop=("adp", "adp_stdev"))
     assert full.shape[1] - less.shape[1] == 2
     assert "adp" in names_full and "adp" not in names_less
+
+
+def test_extra_features_can_be_added_for_a_fair_test():
+    """A candidate feature must be testable on the same path as a shipping one.
+
+    Without this, "we tried adding it" runs through different code than "we
+    tried removing it", and the two answers are not comparable.
+    """
+    df = _frame().with_columns(pl.lit(1.0).alias("role_change"))
+    base, names_base = _matrix(df)
+    more, names_more = _matrix(df, extra=("role_change",))
+    assert more.shape[1] - base.shape[1] == 1
+    assert "role_change" in names_more and "role_change" not in names_base

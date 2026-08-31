@@ -16,6 +16,11 @@ import lightgbm as lgb
 import numpy as np
 import polars as pl
 
+# Roster churn: who arrived this offseason, what volume they brought, and
+# whether the quarterback room improved. Kept behind a flag (see `use_churn`)
+# until an ablation says it earns its place.
+from src.features.roster_churn import CHURN_FEATURES
+
 FEATURES = [
     # prior production and opportunity
     "ppg_lag1", "points_lag1", "games_lag1", "targets_pg_lag1", "carries_pg_lag1",
@@ -32,8 +37,14 @@ FEATURES = [
     # situation
     "vacated_targets", "vacated_carries", "vegas_implied_ppg",
     "changed_team", "is_rookie",
-    # role, from the preseason depth chart -- published before week one
-    "depth_rank", "is_starter",
+    # role, from the preseason depth chart -- published before week one.
+    # `is_starter` only. `depth_rank` is on two different scales either side of
+    # the 2025 feed change and is not comparable; `was_starter` and
+    # `role_change` are comparable and measured at exactly zero value
+    # (+0.0002 +/- 0.0012 over 20 seeds), so they stay in the feature table for
+    # inspection and out of the model. The promotion effect the EDA measures is
+    # real and is already carried by `is_starter` plus prior production.
+    "is_starter",
     # durability, from last season's injury reports
     "inj_weeks_out_lag1", "inj_weeks_questionable_lag1",
     "inj_weeks_dnp_lag1", "inj_weeks_on_report_lag1",
@@ -80,7 +91,9 @@ N_ROUNDS = 350
 MARKET_FEATURES = ["adp", "adp_stdev"]
 
 
-DEPTH_FEATURES = ["depth_rank", "is_starter"]
+DEPTH_FEATURES = ["is_starter"]
+# Measured at zero and kept out of FEATURES; named so an audit can find them.
+ROLE_CHANGE_FEATURES = ["was_starter", "role_change"]
 INJURY_FEATURES = [
     "inj_weeks_out_lag1", "inj_weeks_questionable_lag1",
     "inj_weeks_dnp_lag1", "inj_weeks_on_report_lag1",
@@ -88,17 +101,22 @@ INJURY_FEATURES = [
 
 
 def _matrix(df: pl.DataFrame, use_market: bool = False,
-            use_college: bool = False,
-            drop: tuple[str, ...] = ()) -> tuple[np.ndarray, list[str]]:
+            use_college: bool = False, use_churn: bool = False,
+            drop: tuple[str, ...] = (),
+            extra: tuple[str, ...] = ()) -> tuple[np.ndarray, list[str]]:
     """Feature matrix, built directly from polars to avoid a pandas copy.
 
-    `drop` removes named features, which is what makes honest ablation possible:
-    the same code path with and without a feature group.
+    `drop` removes named features and `extra` adds columns that are in the
+    feature table but not in the shipping list. Between them an ablation can
+    test both directions on the same code path, which is what stops "we tried
+    adding it" from meaning something different than "we tried removing it".
     """
     feature_list = (
         FEATURES
         + (MARKET_FEATURES if use_market else [])
         + (COLLEGE_FEATURES if use_college else [])
+        + (CHURN_FEATURES if use_churn else [])
+        + list(extra)
     )
     feature_list = [f for f in feature_list if f not in drop]
     cols = [c for c in feature_list if c in df.columns]
@@ -117,26 +135,28 @@ def _matrix(df: pl.DataFrame, use_market: bool = False,
 
 def train(train_df: pl.DataFrame, target: str, params: dict | None = None,
           use_market: bool = False, use_college: bool = False,
-          drop: tuple[str, ...] = ()) -> lgb.Booster:
-    x, names = _matrix(train_df, use_market, use_college, drop)
+          use_churn: bool = False, drop: tuple[str, ...] = (),
+          extra: tuple[str, ...] = ()) -> lgb.Booster:
+    x, names = _matrix(train_df, use_market, use_college, use_churn, drop, extra)
     y = train_df[target].to_numpy().astype(float)
     dataset = lgb.Dataset(x, label=y, feature_name=names)
     return lgb.train(params or PARAMS, dataset, num_boost_round=N_ROUNDS)
 
 
 def predict_points(
-    train_df: pl.DataFrame, score_df: pl.DataFrame, use_market: bool = False
+    train_df: pl.DataFrame, score_df: pl.DataFrame, use_market: bool = False,
+    use_churn: bool = False,
 ) -> tuple[np.ndarray, dict[str, lgb.Booster]]:
     """Predict season points as (points per game) x (games played)."""
     fit = train_df.filter(pl.col("y_games") > 0).with_columns(
         (pl.col("y_points") / pl.col("y_games")).alias("y_ppg")
     )
-    ppg_model = train(fit, "y_ppg", use_market=use_market)
+    ppg_model = train(fit, "y_ppg", use_market=use_market, use_churn=use_churn)
 
     # Games is fitted on everyone, including the zeros: not playing is an outcome.
-    games_model = train(train_df, "y_games", use_market=use_market)
+    games_model = train(train_df, "y_games", use_market=use_market, use_churn=use_churn)
 
-    x, _ = _matrix(score_df, use_market)
+    x, _ = _matrix(score_df, use_market, use_churn=use_churn)
     ppg = np.clip(ppg_model.predict(x), 0, None)
     games = np.clip(games_model.predict(x), 0, 17)
     return ppg * games, {"ppg": ppg_model, "games": games_model}
@@ -151,7 +171,7 @@ COMPACT_FEATURES = [
     "adp", "adp_stdev",          # the market, and how much it disagrees with itself
     "exp_ppg_lag1",              # opportunity-based expected points
     "ppg_lag1",                  # prior production
-    "depth_rank",                # role
+    "is_starter",                # role
     "contract_cap_pct",          # what the team has invested
     "age",
     "draft_overall",

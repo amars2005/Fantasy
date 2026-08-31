@@ -12,6 +12,8 @@ Feature groups:
   * player attributes: age, NFL experience, draft capital
   * contract: years remaining, contract year, cap share, guaranteed money
   * team context: team change, vacated targets and carries, Vegas implied total
+  * roster churn: who arrived, what they brought, and whether the quarterback
+    room improved (see src/features/roster_churn.py)
 """
 
 from __future__ import annotations
@@ -19,8 +21,10 @@ from __future__ import annotations
 import polars as pl
 
 from src.features.player_season import build as build_player_season
+from src.features.roster_churn import build_churn
 from src.ingest import nflverse as nv
 from src.ingest.cache import cached
+from src.ingest.nflverse import CURRENT_MAX_AGE
 
 LAG_STATS = [
     "points", "ppg", "games", "targets", "carries", "receptions",
@@ -30,17 +34,12 @@ LAG_STATS = [
 ]
 
 
-def _rosters(seasons: list[int]) -> pl.DataFrame:
-    """Per-season roster with age and experience."""
-    import nflreadpy as nfl
-
-    key = f"rosters_multi_{min(seasons)}_{max(seasons)}"
-    ros = cached(key, lambda: nfl.load_rosters(seasons=seasons), max_age_hours=12.0)
+def _roster_columns(frame: pl.DataFrame, season: int) -> pl.DataFrame:
     return (
-        ros.filter(pl.col("position").is_in(["QB", "RB", "WR", "TE"]))
+        frame.filter(pl.col("position").is_in(["QB", "RB", "WR", "TE"]))
         .select(
             pl.col("gsis_id").alias("player_id"),
-            pl.col("season").cast(pl.Int32),
+            pl.lit(season).cast(pl.Int32).alias("season"),
             pl.col("team"),
             pl.col("position").alias("pos"),
             pl.col("birth_date"),
@@ -49,6 +48,59 @@ def _rosters(seasons: list[int]) -> pl.DataFrame:
         )
         .filter(pl.col("player_id").is_not_null())
         .unique(subset=["player_id", "season"], keep="first")
+    )
+
+
+def _season_roster(season: int, draft_day: bool = True) -> pl.DataFrame:
+    """The roster as it stood at the start of `season`.
+
+    This distinction is not pedantry. `load_rosters` returns a season-level
+    snapshot taken at the *end* of the year, so a player traded in October is
+    listed with the team that acquired him -- 12% of skill players in 2024 sit on
+    a different team there than they did in week one. Every feature derived from
+    roster membership (team context, vacated opportunity, and everything in
+    roster_churn) would then be reading the season it is supposed to predict.
+
+    Weekly rosters give the week-one snapshot instead, which is what a drafter
+    could actually see. They stop at the last completed season, so the season
+    currently being drafted falls back to the live roster -- which for a season
+    that has not started yet is the same thing.
+
+    `draft_day=False` restores the leaking end-of-season snapshot. It exists so
+    the size of the leak can be measured rather than asserted; nothing that ships
+    should use it.
+    """
+    import nflreadpy as nfl
+
+    if not draft_day:
+        return cached(
+            f"roster_endofseason_{season}",
+            lambda: _roster_columns(nfl.load_rosters(seasons=[season]), season),
+            max_age_hours=CURRENT_MAX_AGE,
+        )
+
+    def week_one() -> pl.DataFrame:
+        weekly = nfl.load_rosters_weekly(seasons=[season])
+        return _roster_columns(
+            weekly.filter(pl.col("week") == pl.col("week").min()), season
+        )
+
+    try:
+        return cached(f"roster_week1_{season}", week_one, max_age_hours=None)
+    except Exception:
+        # No weekly file yet: the season has not been played.
+        return cached(
+            f"roster_live_{season}",
+            lambda: _roster_columns(nfl.load_rosters(seasons=[season]), season),
+            max_age_hours=CURRENT_MAX_AGE,
+        )
+
+
+def _rosters(seasons: list[int], draft_day: bool = True) -> pl.DataFrame:
+    """Draft-day rosters with age and experience, one row per player-season."""
+    frames = [_season_roster(season, draft_day) for season in seasons]
+    return (
+        pl.concat(frames, how="diagonal_relaxed")
         .with_columns(
             (pl.col("season") - pl.col("birth_date").dt.year().cast(pl.Float64))
             .alias("age")
@@ -265,17 +317,38 @@ def _injury_history(seasons: list[int]) -> pl.DataFrame:
     })
 
 
+# Per-team players the pre-2025 feed lists at `depth_team == 1`, averaged over
+# 2015-2024 and stable to about +/-0.1 across those seasons. The old feed ranks
+# within a *formation slot*, so all three starting receivers are a "1".
+LEGACY_STARTER_RATE = {"QB": 1.01, "RB": 1.48, "WR": 3.04, "TE": 1.24}
+# 2025+ ranks the whole position group instead, 1..15. These cutoffs are the ones
+# whose per-team counts land nearest the rates above, so `is_starter` means the
+# same thing on both sides of the change. Running back is the loose one: the old
+# feed called 1.48 backs per team a starter, which is a committee fudge no cutoff
+# on a strict ordering can reproduce.
+STARTER_RANK = {"QB": 1, "RB": 1, "WR": 3, "TE": 1}
+
+
 def _depth_chart(seasons: list[int]) -> pl.DataFrame:
-    """Preseason depth-chart rank per player-season.
+    """Preseason depth-chart role per player-season.
 
     Role is the strongest available proxy for opportunity, and opportunity is the
     most predictable input in fantasy football -- a WR1 designation is worth far
     more than any amount of prior-season efficiency. This is published before
     week one, so it is legitimately knowable on draft day.
 
-    nflverse changed this feed's schema in 2025: seasons through 2024 carry
-    `depth_team` keyed by week, while 2025 onward carry `pos_rank` keyed by a
-    timestamp. Both are normalised to the same columns here.
+    nflverse changed this feed's schema in 2025, and the two versions are not on
+    the same scale. Through 2024 `depth_team` is the player's slot within a
+    *formation*, capped at 3, so a team fields about three receivers at rank 1.
+    From 2025 `pos_rank` is a strict ordering of the whole position group and
+    runs to 15, so exactly one receiver is rank 1 and the mean jumps from 1.75 to
+    3.59.
+
+    `is_starter` is therefore calibrated per position (see STARTER_RANK) and is
+    the only column here that means the same thing on both sides of the break.
+    `depth_rank` is passed through as the source reports it and is **not**
+    comparable across 2025 -- it is kept for inspection, and `depth_schema` says
+    which feed produced it, but it is deliberately not a model feature.
     """
     import nflreadpy as nfl
 
@@ -296,6 +369,11 @@ def _depth_chart(seasons: list[int]) -> pl.DataFrame:
                         pl.col("gsis_id").alias("player_id"),
                         pl.lit(season).cast(pl.Int32).alias("season"),
                         pl.col("pos_rank").cast(pl.Float64).alias("depth_rank"),
+                        (
+                            pl.col("pos_rank")
+                            <= pl.col("pos_abb").replace_strict(STARTER_RANK, default=1)
+                        ).cast(pl.Int8).alias("is_starter"),
+                        pl.lit("pos_rank").alias("depth_schema"),
                     )
                 )
             else:                               # 2020-2024 schema
@@ -309,22 +387,46 @@ def _depth_chart(seasons: list[int]) -> pl.DataFrame:
                         pl.col("gsis_id").alias("player_id"),
                         pl.lit(season).cast(pl.Int32).alias("season"),
                         "depth_rank",
+                        (pl.col("depth_rank") == 1).cast(pl.Int8).alias("is_starter"),
+                        pl.lit("depth_team").alias("depth_schema"),
                     )
                 )
             return out.unique(subset=["player_id", "season"], keep="first")
 
         try:
-            frames.append(cached(f"depth_rank_{season}", load, max_age_hours=12.0))
+            # Key carries the schema version: the columns this returns changed
+            # when the feed did, and a cache written by the old code would come
+            # back missing them rather than erroring somewhere obvious.
+            frames.append(cached(f"depth_role_v2_{season}", load, max_age_hours=12.0))
         except Exception:
             continue
 
     if not frames:
         return pl.DataFrame(schema={"player_id": pl.Utf8, "season": pl.Int32,
-                                    "depth_rank": pl.Float64})
-    return pl.concat(frames).with_columns(
-        # Starter status is the part that matters; rank 4+ are all "not playing".
-        (pl.col("depth_rank") == 1).cast(pl.Int8).alias("is_starter"),
-        pl.col("depth_rank").clip(1, 5).alias("depth_rank"),
+                                    "depth_rank": pl.Float64, "is_starter": pl.Int8,
+                                    "depth_schema": pl.Utf8})
+    return pl.concat(frames).with_columns(pl.col("depth_rank").clip(1, 5))
+
+
+def _prior_role(target_seasons: list[int]) -> pl.DataFrame:
+    """Last preseason's starter status, so a promotion is visible as a change.
+
+    The feature table carried role as a level and not as a move, and the two are
+    different claims: a receiver who has been the starter for three years and one
+    who was promoted in August have the same `is_starter` and very different
+    prior seasons behind them. Both charts are published before their own week
+    one, so nothing here is known later than draft day.
+    """
+    span = [s - 1 for s in target_seasons]
+    prior = _depth_chart(sorted(set(span + target_seasons)))
+    if "is_starter" not in prior.columns:
+        return pl.DataFrame(schema={"player_id": pl.Utf8, "season": pl.Int32})
+    return (
+        prior.select(
+            "player_id", "season", pl.col("is_starter").alias("was_starter")
+        )
+        .with_columns((pl.col("season") + 1).cast(pl.Int32).alias("season"))
+        .unique(subset=["player_id", "season"], keep="first")
     )
 
 
@@ -386,6 +488,24 @@ def _draft_picks_raw() -> pl.DataFrame:
     )
 
 
+def _draft_class() -> pl.DataFrame:
+    """Draft slot *and* the year it was spent, which draft capital alone drops.
+
+    Roster churn needs to know that a team took a running back at pick 20 *this*
+    April, not that the running back it already had was once taken at pick 20.
+    """
+    return (
+        _draft_picks_raw()
+        .filter(pl.col("gsis_id").is_not_null())
+        .select(
+            pl.col("gsis_id").alias("player_id"),
+            pl.col("season").cast(pl.Int32).alias("draft_season"),
+            pl.col("pick").cast(pl.Float64).alias("draft_overall"),
+        )
+        .unique(subset=["player_id"], keep="first")
+    )
+
+
 def _adp(seasons: list[int]) -> pl.DataFrame:
     """Historical ADP per player-season. Known on draft day, so usable."""
     from src.ingest.adp import load_adp
@@ -413,12 +533,17 @@ def _adp(seasons: list[int]) -> pl.DataFrame:
     return pl.concat(frames)
 
 
-def build(target_seasons: list[int], stats: pl.DataFrame | None = None) -> pl.DataFrame:
+def build(target_seasons: list[int], stats: pl.DataFrame | None = None,
+          draft_day_rosters: bool = True) -> pl.DataFrame:
     """Training/scoring table for the given target seasons.
 
     `stats` may be passed in to avoid rebuilding the player-season frame, which
     is the largest object in this pipeline -- constructing it twice in one
     process is enough to exhaust a laptop's free memory.
+
+    `draft_day_rosters=False` reverts to end-of-season roster membership, which
+    leaks in-season trades into every team-context feature. It is here to be
+    measured against, not used.
     """
     lo = min(target_seasons) - 3
     hi = max(target_seasons)
@@ -426,7 +551,7 @@ def build(target_seasons: list[int], stats: pl.DataFrame | None = None) -> pl.Da
 
     if stats is None:
         stats = build_player_season([s for s in stat_seasons if s < hi] or [hi - 1])
-    rosters = _rosters(list(range(lo, hi + 1)))
+    rosters = _rosters(list(range(lo, hi + 1)), draft_day=draft_day_rosters)
     vacated = _vacated(stats, rosters, target_seasons)
     vegas = _vegas(list(range(lo, hi + 1)))
 
@@ -447,9 +572,16 @@ def build(target_seasons: list[int], stats: pl.DataFrame | None = None) -> pl.Da
         stats.select("player_id", "season", pl.col("team").alias("prev_team"))
         .with_columns((pl.col("season") + 1).cast(pl.Int32).alias("season"))
     )
+    contracts = _contract_features(spine)
+    churn = build_churn(
+        stats, rosters, target_seasons,
+        contract_caps=contracts.select("player_id", "season", "contract_cap_pct"),
+        draft_picks=_draft_class(),
+    )
     spine = (
         spine.join(prev_team, on=["player_id", "season"], how="left")
-        .join(_contract_features(spine), on=["player_id", "season"], how="left")
+        .join(contracts, on=["player_id", "season"], how="left")
+        .join(churn, on=["player_id", "season"], how="left")
         .join(vacated, on=["team", "season"], how="left")
         .join(vegas, on=["team", "season"], how="left")
         .join(_combine(), on="player_id", how="left")
@@ -457,6 +589,7 @@ def build(target_seasons: list[int], stats: pl.DataFrame | None = None) -> pl.Da
         .join(_adp(target_seasons), on=["player_id", "season"], how="left")
         .join(_college_features(list(range(lo - 4, hi + 1))), on="player_id", how="left")
         .join(_depth_chart(target_seasons), on=["player_id", "season"], how="left")
+        .join(_prior_role(target_seasons), on=["player_id", "season"], how="left")
         .join(
             _injury_history(list(range(lo, hi + 1))),
             on=["player_id", "season"], how="left",
@@ -475,6 +608,11 @@ def build(target_seasons: list[int], stats: pl.DataFrame | None = None) -> pl.Da
             .cast(pl.Int8)
             .alias("changed_team"),
             (pl.col("years_exp") == 0).cast(pl.Int8).alias("is_rookie"),
+            # +1 promoted into the starting group this preseason, -1 demoted out
+            # of it, 0 unchanged. Null where either chart is missing, which the
+            # booster handles natively.
+            (pl.col("is_starter").cast(pl.Int8) - pl.col("was_starter").cast(pl.Int8))
+            .alias("role_change"),
         )
     )
     return spine

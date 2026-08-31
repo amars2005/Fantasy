@@ -284,7 +284,7 @@ def main() -> None:
 
     rows = []
     for season in seasons:
-        curves = fit_curves([s for s in span if s < season])
+        curves = fit_curves([s for s in span if s < season], with_se=False)
         sources = {
             "consensus (ships today)": consensus_projection(season, curves),
             "perfect foresight": perfect_projection(season),

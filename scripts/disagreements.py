@@ -59,7 +59,7 @@ def _fit_and_score(features: pl.DataFrame, span: list[int], year: int) -> pl.Dat
     if train_df.height < 200 or score_df.height < 40:
         return None
 
-    curves = fit_curves([s for s in span if s < year])
+    curves = fit_curves([s for s in span if s < year], with_se=False)
     base_train = _adp_baseline(train_df, curves)
     base_score = _adp_baseline(score_df, curves)
 

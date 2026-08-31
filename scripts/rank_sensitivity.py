@@ -118,7 +118,7 @@ def main() -> None:
     rng = np.random.default_rng(5)
 
     train = build_training_frame(FIT_SEASONS)
-    baseline_curves = fit_curves(FIT_SEASONS)
+    baseline_curves = fit_curves(FIT_SEASONS, with_se=False)
     base_board = board_from_curves(baseline_curves)
     base_name, base_pos = top_pick(base_board, gap, rng)
     print(f"Baseline recommendation at pick {picks[0]}: {base_name} ({base_pos})\n")

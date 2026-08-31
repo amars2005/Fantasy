@@ -68,7 +68,7 @@ def main(seeds: int = 8) -> None:
             ev = features.filter((pl.col("season") == year) & (pl.col("adp") < 400))
             if tr.height < 200 or ev.height < 40:
                 continue
-            curves = fit_curves([s for s in span if s < year])
+            curves = fit_curves([s for s in span if s < year], with_se=False)
             bt, bs = _baseline(tr, curves), _baseline(ev, curves)
             rt = tr.with_columns(pl.Series("y_resid", tr["y_points"].to_numpy() - bt))
 

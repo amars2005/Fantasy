@@ -3,11 +3,16 @@
 Completed seasons never change, so they are cached forever. Anything tied to the
 current season (ADP, rankings, rosters) carries a max-age so a stale draft board
 is impossible.
+
+Staleness is a softer failure than absence. If a source is unreachable and we
+hold an expired copy, serving the expired copy with a warning beats raising --
+the alternative on draft morning is no board at all.
 """
 
 from __future__ import annotations
 
 import time
+import warnings
 from pathlib import Path
 from typing import Callable
 
@@ -36,7 +41,22 @@ def cached(
         if fresh:
             return pl.read_parquet(path)
 
-    df = loader()
+    try:
+        df = loader()
+    except Exception as exc:
+        # Expired but present beats absent. The caller asked for a refresh and
+        # could not have one; hand back what we have and say so, loudly enough
+        # to notice but not so loudly that a draft stops.
+        if path.exists():
+            age_h = (time.time() - path.stat().st_mtime) / 3600
+            warnings.warn(
+                f"{name}: refresh failed ({exc.__class__.__name__}); "
+                f"serving cached copy {age_h:.1f}h old",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return pl.read_parquet(path)
+        raise
     df.write_parquet(path)
     return df
 
