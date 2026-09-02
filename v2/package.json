@@ -7,6 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "bundle:stage": "node scripts/stage-bundle.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",

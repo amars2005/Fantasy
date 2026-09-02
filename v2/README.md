@@ -127,10 +127,31 @@ e2e/           Playwright: the app driven in a real browser
 
 | Variable | Effect when unset |
 |---|---|
-| `DATABASE_URL` | Leagues stored in `.data/leagues.json` |
+| `DATABASE_URL` | Leagues stored in `.data/leagues.json` (see [Database](#database) before setting it) |
 | `BUNDLE_BASE_URL` | Bundle read off disk: `BUNDLE_DIR`, then `data/v2_export`, then `../data/v2_export` |
 | `BUNDLE_DIR` | The two default directories are searched; setting it searches that directory only |
+| `FANTASY_DATA_FILE` | The file store writes to `.data/leagues.json` |
 | `BLOB_READ_WRITE_TOKEN` | The publish step in CI is skipped |
+
+## Database
+
+The file store is the default and needs nothing, but it writes to disk, and a
+serverless filesystem is read-only outside `/tmp`. On a hosted deployment that
+leaves two options.
+
+**Postgres** (what a draft running over days needs). It must be Neon:
+[`store.ts`](lib/store.ts) uses `drizzle-orm/neon-http` with
+`@neondatabase/serverless`, which speaks Neon's HTTP protocol, so an RDS or
+Supabase URL will not connect. Create the tables before setting `DATABASE_URL`
+-- pointing it at an empty database is worse than leaving it unset, since every
+request then fails on `relation "leagues" does not exist`. Either run
+`DATABASE_URL=... npm run db:migrate`, or paste
+[`db/migrations/0000_moaning_eddie_brock.sql`](db/migrations) into Neon's SQL
+editor, which needs no local tooling.
+
+**Ephemeral** (fine for trying it out, not for a real draft). Set
+`FANTASY_DATA_FILE=/tmp/leagues.json`. Serverless `/tmp` is writable but
+per-instance and short-lived, so leagues vanish on a cold start.
 
 ## Deploying
 

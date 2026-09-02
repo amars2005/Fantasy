@@ -86,13 +86,32 @@ export class FileStore implements Store {
   }
 
   private async write(data: FileShape): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
-    // Write-then-rename, so a crash mid-save cannot leave a truncated file
-    // that would read back as an empty draft.
-    const tmp = `${this.path}.tmp`;
-    await writeFile(tmp, JSON.stringify(data, null, 1), "utf-8");
-    const { rename } = await import("node:fs/promises");
-    await rename(tmp, this.path);
+    try {
+      await mkdir(dirname(this.path), { recursive: true });
+      // Write-then-rename, so a crash mid-save cannot leave a truncated file
+      // that would read back as an empty draft.
+      const tmp = `${this.path}.tmp`;
+      await writeFile(tmp, JSON.stringify(data, null, 1), "utf-8");
+      const { rename } = await import("node:fs/promises");
+      await rename(tmp, this.path);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      // A serverless filesystem is read-only outside /tmp, so the store that
+      // exists to need no provisioning is the one thing that cannot work
+      // there. Unhandled, this surfaced as `ENOENT: mkdir '/var/task/v2/.data'`
+      // -- a path the deployer never chose, about a database they never knew
+      // they needed.
+      if (code === "EROFS" || code === "EACCES" || code === "ENOENT") {
+        throw new Error(
+          `Cannot write ${this.path}: the filesystem is read-only. Set ` +
+            `DATABASE_URL to store leagues in Postgres, which is what a draft ` +
+            `running over days needs, or FANTASY_DATA_FILE to a writable path ` +
+            `such as /tmp/leagues.json -- ephemeral, so leagues there are lost ` +
+            `on every cold start.`,
+        );
+      }
+      throw err;
+    }
   }
 
   async createLeague(record: LeagueRecord): Promise<LeagueRecord> {
