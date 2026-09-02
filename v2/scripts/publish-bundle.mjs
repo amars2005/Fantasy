@@ -6,7 +6,9 @@
  * shows its date -- but a half-written bundle would parse cleanly and be
  * silently wrong, which is the failure this ordering exists to prevent.
  *
- * Set BUNDLE_BASE_URL in the app to the value this prints.
+ * Set BUNDLE_BASE_URL in the app to the store root this prints -- not to the
+ * dated prefix, which moves with every refresh. The app resolves the prefix
+ * through the pointer on each cold start, so the variable is set once.
  */
 
 import { readdir, readFile } from "node:fs/promises";
@@ -51,10 +53,11 @@ for (const name of files) {
 }
 
 // Every file landed. Move the pointer.
-await put(
+const { url: pointerUrl } = await put(
   "bundle/latest.json",
   JSON.stringify({ prefix: `bundle/${stamp}`, files: uploaded, publishedAt: new Date().toISOString() }),
   { access: "public", token, contentType: "application/json", addRandomSuffix: false },
 );
 
 console.log(`\nPublished ${uploaded.length} files under bundle/${stamp} and moved latest.`);
+console.log(`Set BUNDLE_BASE_URL to ${pointerUrl.replace(/\/bundle\/latest\.json$/, "")}`);

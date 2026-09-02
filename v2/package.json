@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "bundle:stage": "node scripts/stage-bundle.mjs",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -16,7 +16,9 @@ npm run dev       # http://localhost:3000
 
 No database and no cloud storage are needed to run it. With no `DATABASE_URL`
 the app stores leagues in `.data/leagues.json`, and with no `BUNDLE_BASE_URL` it
-reads the static bundle straight out of `../data/v2_export`.
+reads the static bundle straight off disk. See [Deploying](#deploying) for what
+that means once the app is hosted: the checkout the development path reads is
+not there, so a deployment needs the bundle pointed at or shipped with it.
 
 ## Why it is built this way
 
@@ -126,8 +128,30 @@ e2e/           Playwright: the app driven in a real browser
 | Variable | Effect when unset |
 |---|---|
 | `DATABASE_URL` | Leagues stored in `.data/leagues.json` |
-| `BUNDLE_BASE_URL` | Bundle read from `../data/v2_export` |
+| `BUNDLE_BASE_URL` | Bundle read off disk: `BUNDLE_DIR`, then `data/v2_export`, then `../data/v2_export` |
+| `BUNDLE_DIR` | Only the two default directories are searched |
 | `BLOB_READ_WRITE_TOKEN` | The publish step in CI is skipped |
+
+## Deploying
+
+The bundle is not in the repo -- it is a build product of the Python pipeline,
+regenerated daily -- so a deployment has to be told where it is. Nothing else
+about the app needs provisioning, but this does, and skipping it is the one
+failure that takes every board down at once: league creation dies on a missing
+`board_ppr.json`, since the projection has nothing to project from.
+
+**Fetched from Blob** (what the daily Action is for). Set `BUNDLE_BASE_URL` to
+the Blob store root that `scripts/publish-bundle.mjs` prints. Set it once: the
+files live under a dated prefix that moves with every refresh, and the app
+resolves the current one through the `bundle/latest.json` pointer, which the
+publish step moves only after every file has landed.
+
+**Shipped with the app** (no Blob store, no environment variable). Run
+`npm run bundle:stage` to copy the export into `v2/data/v2_export` and commit
+it. `next.config.mjs` traces those files into the serverless function -- nothing
+imports them, so without that they would not be deployed -- and the loader finds
+them there. The trade is that the ADP is then as old as the commit, which the
+banner in the UI dates for you.
 
 ## Known limitations
 

@@ -14,5 +14,8 @@ v2/node_modules/
 v2/.next/
 v2/.data/
 data/v2_export/
+# ...except a bundle staged for deployment: it ships with the app when
+# there is no Blob store to fetch from (`npm run bundle:stage`).
+!v2/data/v2_export/
 v2/test-results/
 v2/playwright-report/
