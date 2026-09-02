@@ -15,18 +15,47 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const DIR = join(process.cwd(), "..", "data", "v2_export");
-const token = process.env.BLOB_READ_WRITE_TOKEN;
 
-if (!token) {
+// A secret pasted with its surrounding quotes, or as the whole `KEY="value"`
+// line, is a valid string as far as the environment is concerned and reaches
+// the API as a token that simply is not one. What comes back is an access
+// denial indistinguishable from a revoked token, so check the shape here.
+const raw = process.env.BLOB_READ_WRITE_TOKEN;
+
+if (!raw || !raw.trim()) {
   console.error("BLOB_READ_WRITE_TOKEN is not set; nothing published.");
   process.exit(0);
 }
 
+const token = raw.trim().replace(/^BLOB_READ_WRITE_TOKEN=/, "").replace(/^["']|["']$/g, "");
+
+// vercel_blob_rw_<storeId>_<secret>
+const parts = token.split("_");
+if (!token.startsWith("vercel_blob_rw_") || parts.length < 5 || !parts[3]) {
+  console.error(
+    "BLOB_READ_WRITE_TOKEN does not look like a Blob token. Expected " +
+      "vercel_blob_rw_<storeId>_<secret>; got " +
+      `${token.length} characters starting "${token.slice(0, 12)}". Check the ` +
+      "secret holds the token alone -- no quotes, no KEY= prefix, no newline.",
+  );
+  process.exit(1);
+}
+
+// Which store this run is writing to. The id is public -- it is in the URL of
+// every file published -- and printing it is how you tell a stale secret from
+// a revoked one when the API says only "access denied".
+console.log(`Publishing to Blob store ${parts[3]}.`);
+
 const { put } = await import("@vercel/blob");
 
-const files = (await readdir(DIR)).filter((f) => f.endsWith(".json"));
+let files;
+try {
+  files = (await readdir(DIR)).filter((f) => f.endsWith(".json"));
+} catch {
+  files = [];
+}
 if (!files.length) {
-  console.error("No bundle files found. Run scripts/export_v2_bundle.py first.");
+  console.error(`No bundle files in ${DIR}. Run scripts/export_v2_bundle.py first.`);
   process.exit(1);
 }
 
