@@ -9,9 +9,9 @@
  *    the dated prefix is resolved through the `bundle/latest.json` pointer that
  *    `scripts/publish-bundle.mjs` moves only once every file has landed, or
  *    straight at a prefix that already holds the files.
- * 2. `BUNDLE_DIR`, or `data/v2_export` beside the app -- a bundle deployed
- *    with the app rather than fetched. `next.config.mjs` traces those files
- *    into the serverless function.
+ * 2. `data/v2_export` beside the app -- a bundle deployed with the app rather
+ *    than fetched. `next.config.mjs` traces those files into the serverless
+ *    function. `BUNDLE_DIR` replaces this search with one directory.
  * 3. `../data/v2_export` -- the repo checkout in development, so the app runs
  *    with nothing provisioned.
  *
@@ -38,16 +38,23 @@ function trimSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-/** Directories to try, most explicit first. */
+/**
+ * Directories to try.
+ *
+ * BUNDLE_DIR is exclusive rather than first in line: someone who names a
+ * directory wants that bundle, and quietly serving a different one from a
+ * default path is how you end up debugging a board that came from somewhere
+ * nobody pointed at.
+ */
 function localDirs(): string[] {
-  const dirs: string[] = [];
   const explicit = process.env.BUNDLE_DIR;
-  if (explicit) dirs.push(isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit));
-  // Deployed with the app: `next.config.mjs` traces this into the function.
-  dirs.push(join(process.cwd(), "data", "v2_export"));
-  // The repo checkout, in development.
-  dirs.push(join(process.cwd(), "..", "data", "v2_export"));
-  return dirs;
+  if (explicit) return [isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit)];
+  return [
+    // Deployed with the app: `next.config.mjs` traces this into the function.
+    join(process.cwd(), "data", "v2_export"),
+    // The repo checkout, in development.
+    join(process.cwd(), "..", "data", "v2_export"),
+  ];
 }
 
 function isMissing(err: unknown): boolean {

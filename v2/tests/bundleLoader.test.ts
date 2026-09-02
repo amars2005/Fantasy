@@ -50,6 +50,10 @@ describe("local bundles", () => {
   });
 
   it("says what to configure when there is no bundle anywhere", async () => {
+    // BUNDLE_DIR is exclusive, so this holds whether or not the checkout this
+    // runs in happens to have an exported bundle sitting at the repo root --
+    // in CI it does, and a first version of this test passed locally and
+    // failed there for exactly that reason.
     process.env.BUNDLE_DIR = join(dir, "absent");
 
     // The failure a deployment actually hits, so it has to name the fix.

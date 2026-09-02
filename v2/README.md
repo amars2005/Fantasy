@@ -129,7 +129,7 @@ e2e/           Playwright: the app driven in a real browser
 |---|---|
 | `DATABASE_URL` | Leagues stored in `.data/leagues.json` |
 | `BUNDLE_BASE_URL` | Bundle read off disk: `BUNDLE_DIR`, then `data/v2_export`, then `../data/v2_export` |
-| `BUNDLE_DIR` | Only the two default directories are searched |
+| `BUNDLE_DIR` | The two default directories are searched; setting it searches that directory only |
 | `BLOB_READ_WRITE_TOKEN` | The publish step in CI is skipped |
 
 ## Deploying
