@@ -47,6 +47,10 @@ for (const name of files) {
     token,
     contentType: "application/json",
     addRandomSuffix: false,
+    // Without this the SDK refuses to write a pathname that already exists,
+    // which would make a same-day re-run fail on its first file -- and a
+    // re-run is exactly what happens after a flake or a fix.
+    allowOverwrite: true,
   });
   uploaded.push(name);
   console.log(`  ${name} -> ${url}`);
@@ -56,7 +60,8 @@ for (const name of files) {
 const { url: pointerUrl } = await put(
   "bundle/latest.json",
   JSON.stringify({ prefix: `bundle/${stamp}`, files: uploaded, publishedAt: new Date().toISOString() }),
-  { access: "public", token, contentType: "application/json", addRandomSuffix: false },
+  // The pointer is rewritten by every refresh; that is its whole job.
+  { access: "public", token, contentType: "application/json", addRandomSuffix: false, allowOverwrite: true },
 );
 
 console.log(`\nPublished ${uploaded.length} files under bundle/${stamp} and moved latest.`);
