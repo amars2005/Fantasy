@@ -33,7 +33,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install nflreadpy polars scikit-learn numpy pytest
+        run: pip install -r requirements.txt
 
       # The nflverse pull is the slow part and completed seasons never change.
       - name: Restore data cache

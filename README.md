@@ -20,7 +20,7 @@ it stopped a worse projection from shipping.
 ## Quick start
 
 ```bash
-pip install nflreadpy pytest
+pip install -r requirements.txt
 
 python scripts/build_projections.py          # projections + value report
 python scripts/cheatsheet.py --slot 8        # printable fallback (open, print to PDF)

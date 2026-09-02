@@ -1,0 +1,12 @@
+# Everything `src/`, `scripts/` and the test suite import.
+#
+# The workflow and the README used to each carry their own pip line, and they
+# drifted: CI installed no lightgbm, so `src/models/points.py` failed to import
+# and collection died before a single test ran. One list, used by both.
+nflreadpy
+polars
+numpy
+scipy
+scikit-learn
+lightgbm
+pytest
