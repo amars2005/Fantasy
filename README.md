@@ -109,6 +109,43 @@ The gap between adjacent tiers is routinely smaller than the spread within one.
 Treat a projection as the middle of a range, not a forecast — which is also why
 the board is ranked by VONA rather than by projected points.
 
+### Choosing inside a tier
+
+Worth being blunt about, because the board does not do it for you: **inside a
+tier, Proj, VOR and VONA are all tied.** VONA is `marginal value − expected best
+available at that position`, and both halves are identical for players sharing a
+projection, so the order you see within a tier is just the ADP order it arrived
+in — not a verdict. Sorting harder would only be inventing a preference the
+model does not have.
+
+Three columns still differ, and they are what there is to choose on:
+
+| | what it tells you |
+|---|---|
+| **Left** | the *timing* signal, not a ranking. At 1 the tier is gone after him, and being last in a tier is the only good reason to reach. |
+| **Bye** | red where it collides with players already on your roster. |
+| **Playoff** | how much softer weeks 15–17 are for his team than the rest of its season, in opponent points allowed per game. Positive is good. |
+
+Playoff lift is computed per league — a bracket running weeks 14–16 needs a
+different number from one running 15–17 — from the opponents each team actually
+faces in those weeks, measured by what those defences allowed last season.
+Sportsbook lines would be the better measure and do not exist in August, which
+is when you draft.
+
+It is deliberately **not** priced into the ranking. It is a team-schedule effect
+measured off last season's defences, which is a weaker thing than a projection,
+and folding it into VONA would let it quietly outvote the market on players it
+has no business separating. It sits in its own column for you to break a tie
+with.
+
+A real tier, and everything that distinguishes its members:
+
+| player | Proj | ± | Bye | Playoff |
+|---|---|---|---|---|
+| Breece Robinson | 278.9 | 20 | 11 | **+3.8** |
+| Bijan Robinson | 278.9 | 20 | 12 | +0.9 |
+| Ja'Marr Robinson | 278.9 | 20 | 13 | **−2.0** |
+
 ### What the Tier and Left columns mean
 
 Tiers are **within a position**, and numbered from 1 down. A WR tier 2 and an RB

@@ -243,6 +243,12 @@ th {
   padding: 7px 8px;
   font-weight: 600;
   border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+/* A wrapped name doubles a row's height and breaks the scan down the board.
+   `.tablewrap` scrolls instead on a screen too narrow to hold it. */
+td.name {
+  white-space: nowrap;
 }
 th:first-child,
 td:first-child {
@@ -278,6 +284,11 @@ tbody tr:hover {
 /* The spread beside a projection: present, and deliberately quieter than the
    number it qualifies. */
 .spread { color: var(--dim); }
+/* Playoff-schedule lift. Quiet until it is worth a full point either way,
+   which on a season of opponents is about where it stops being noise. */
+.lift { color: var(--dim); }
+.lift.up { color: var(--good); }
+.lift.down { color: var(--hot); }
 .boardnote { padding: 0 14px 12px; margin-top: 0; }
 .vona { font-weight: 700; color: var(--good); }
 .muted { color: var(--dim); font-size: 12px; }

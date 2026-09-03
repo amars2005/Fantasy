@@ -99,6 +99,7 @@ export function renderCheatsheet(input: CheatsheetInput): string {
       <td class="num">${(p.vor ?? 0).toFixed(0)}</td>
       <td class="num">${tiered ? `${p.pos}${p.tier}` : "&mdash;"}</td>
       <td class="num">${p.bye ?? "-"}</td>
+      <td class="num dim">${(p.playoff_lift ?? 0) > 0 ? "+" : ""}${(p.playoff_lift ?? 0).toFixed(1)}</td>
     </tr>`;
     })
     .join("\n");
@@ -173,6 +174,7 @@ export function renderCheatsheet(input: CheatsheetInput): string {
             <th class="num">#</th><th>Player</th><th>Pos</th><th>Tm</th>
             <th class="num">ADP</th><th class="num">Proj</th><th class="num">&plusmn;</th>
             <th class="num">VOR</th><th class="num">Tier</th><th class="num">Bye</th>
+            <th class="num">Playoff</th>
           </tr>
         </thead>
         <tbody>
@@ -200,6 +202,7 @@ ${rows}
         <ul>
           <li>A heavy rule under a player means he is the last of his tier. Being last in a tier is the only good reason to reach.</li>
           <li>Proj is read off a curve of draft rank against what players at that rank actually scored, so a tier shares one number. &plusmn; is the measured spread around it — wide enough that the projection is the middle of a range, not a forecast.</li>
+          <li>Inside a tier the projection is tied, so there is nothing to choose on but Bye and Playoff — how much softer weeks 15-17 are for his team than the rest of its season. Neither is priced into the ranking.</li>
           <li>VOR is against replacement, not against the field.</li>
           <li>K and DST last. They are near-random year to year.</li>
         </ul>

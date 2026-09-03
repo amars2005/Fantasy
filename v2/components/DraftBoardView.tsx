@@ -41,6 +41,7 @@ const lockKey = (id: string) => `fantasy.v2.lock.${id}`;
 interface StatCell {
   key: string;
   label: string;
+  title?: string;
   value: string;
   className?: string;
 }
@@ -63,6 +64,8 @@ const NO_TIER = "—";
 const STAT_COLUMNS: {
   key: string;
   label: string;
+  /** Shown on hover, for the columns whose name cannot carry their meaning. */
+  title?: string;
   value: (p: Player) => string;
   className?: (p: Player) => string;
 }[] = [
@@ -79,7 +82,13 @@ const STAT_COLUMNS: {
   // score. It is large -- around 100 points on the first running back -- and
   // printing the projection without it invites reading three significant
   // figures off a number that is an average over a decade of seasons.
-  { key: "sd", label: "\u00b1", value: (p) => (p.sd ?? 0).toFixed(0), className: () => "spread" },
+  {
+    key: "sd",
+    label: "\u00b1",
+    title: "The measured spread of what players at this draft rank went on to score",
+    value: (p) => (p.sd ?? 0).toFixed(0),
+    className: () => "spread",
+  },
   { key: "vona", label: "VONA", value: (p) => (p.vona ?? 0).toFixed(1), className: () => "vona" },
   {
     key: "survives",
@@ -92,12 +101,34 @@ const STAT_COLUMNS: {
     value: (p) => String(p.bye ?? "-"),
     className: (p) => (byeConflicts(p) ? "scarce" : ""),
   },
+  // Inside a tier every number above this one is equal by construction. This is
+  // the one that is not: it is about his team's weeks 15-17, not his draft
+  // rank, so it is what there is to choose between tier-mates on.
+  {
+    key: "playoff",
+    label: "Playoff",
+    title:
+      "How much softer the weeks that decide the title are for his team than " +
+      "the rest of his season, in opponent points allowed per game. Positive " +
+      "is good. Not priced into the ranking -- it is yours to break ties with.",
+    value: (p) => {
+      const lift = p.playoff_lift ?? 0;
+      return `${lift > 0 ? "+" : ""}${lift.toFixed(1)}`;
+    },
+    className: (p) => {
+      const lift = p.playoff_lift ?? 0;
+      if (lift >= 1) return "lift up";
+      if (lift <= -1) return "lift down";
+      return "lift";
+    },
+  },
 ];
 
 const statsFor = (p: Player): StatCell[] =>
   STAT_COLUMNS.map((c) => ({
     key: c.key,
     label: c.label,
+    title: c.title,
     value: c.value(p),
     className: c.className?.(p),
   }));
@@ -611,7 +642,7 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                     <th>Player</th>
                     <th>Pos</th>
                     {STAT_COLUMNS.map((c) => (
-                      <th className="num" key={c.key}>
+                      <th className="num" key={c.key} title={c.title}>
                         {c.label}
                       </th>
                     ))}
@@ -710,7 +741,9 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                       <div className="cardstats">
                         {stats.map((s) => (
                           <div className="cardstat" key={s.key}>
-                            <span className="lbl">{s.label}</span>
+                            <span className="lbl" title={s.title}>
+                              {s.label}
+                            </span>
                             <b className={s.className}>{s.value}</b>
                           </div>
                         ))}
@@ -729,12 +762,18 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
             </ul>
 
             <div className="hint boardnote">
-              Proj is read off a fitted curve of positional draft rank against
-              what players at that rank have actually scored, so players the
-              data cannot separate share a number — that is what a tier is.
-              <b> &plusmn;</b> is the measured spread around it, and it is
-              wide: treat the projection as the middle of a range, not a
-              forecast.
+              <b>Proj</b> is a fitted curve of positional draft rank against what
+              players at that rank actually scored, so players the data cannot
+              separate share a number — that is what a tier is. <b>&plusmn;</b>{" "}
+              is the measured spread around it, and it is wide enough that the
+              projection is the middle of a range, not a forecast.
+              <br />
+              <b>Inside a tier, Proj, VONA and the ranking are all tied</b> — the
+              order you see there is just ADP order, not a verdict. What is left
+              to choose on is <b>Bye</b>, red where it collides with your roster,
+              and <b>Playoff</b>, his team&rsquo;s weeks 15–17 against the rest
+              of its season. Neither is priced into the ranking. <b>Left</b> is
+              the timing signal: at 1 the tier is gone after him.
             </div>
           </div>
         </div>
