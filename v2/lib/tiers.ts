@@ -64,6 +64,38 @@ export function addTiers(
   return out;
 }
 
+/**
+ * Positions where tiering found nothing, so the tier number means nothing.
+ *
+ * A tier is a plateau in the fitted curve -- a set of players the data could
+ * not separate. Kickers and defences have no such plateaus: their curve is fit
+ * on *outcome* rank rather than draft rank, because kicker season points have a
+ * year-over-year correlation near zero, so the fit separates all 24 of them and
+ * every one lands in a tier of his own. `pipeline.test.ts` pins that as the
+ * real answer for those positions rather than a degenerate fit.
+ *
+ * It is still the wrong thing to print. A column reading 1, 2, 3 ... 27 down
+ * the defences is a rank wearing a tier's clothes, and "1 left in this tier"
+ * against every one of them reads as scarcity where there is none -- the board
+ * flags a tier of one in red. So callers ask this and show nothing instead.
+ */
+export function untieredPositions(players: Player[]): Set<Position> {
+  const largest = new Map<Position, number>();
+  const sizes = new Map<string, number>();
+  for (const p of players) {
+    const key = `${p.pos}|${p.tier}`;
+    sizes.set(key, (sizes.get(key) ?? 0) + 1);
+  }
+  for (const [key, n] of sizes) {
+    const pos = key.split("|")[0] as Position;
+    largest.set(pos, Math.max(largest.get(pos) ?? 0, n));
+  }
+
+  const out = new Set<Position>();
+  for (const [pos, n] of largest) if (n <= 1) out.add(pos);
+  return out;
+}
+
 /** How many players remain in a given position's tier. */
 export function playersLeftInTier(
   players: Player[],

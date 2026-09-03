@@ -13,6 +13,7 @@
  * sits.
  */
 
+import { untieredPositions } from "./tiers";
 import type { LeagueConfig, Player } from "./types";
 
 const DEFAULT_LIMIT = 150;
@@ -58,10 +59,35 @@ export function renderCheatsheet(input: CheatsheetInput): string {
 
   const picks = snakeRounds(slot, league.teams, league.rounds);
 
+  // The heavy rule marks the last player of a tier -- the one case worth
+  // reaching for.
+  //
+  // Stated as "the next printed row is a different tier" this is very nearly
+  // right, and was: tier-mates share a projection by definition, so at a fixed
+  // position they share a VOR and sort into one run. It is right by luck of the
+  // ordering rather than by construction, though, and it misses the last row on
+  // the page and any tier still running past the cut. Counting a tier's members
+  // and marking the row that exhausts it says the same thing on purpose.
+  const tierTotal = new Map<string, number>();
+  for (const p of input.players) {
+    const key = `${p.pos}|${p.tier}`;
+    tierTotal.set(key, (tierTotal.get(key) ?? 0) + 1);
+  }
+  const tierSeen = new Map<string, number>();
+  // Positions the fit could not pool at all -- every kicker his own tier. The
+  // rule would mark every one of their rows, which is not a tier break, it is
+  // just the list continuing.
+  const untiered = untieredPositions(input.players);
+
   const rows = top
     .map((p, i) => {
-      const tierBreak =
-        i + 1 < top.length && (top[i + 1].pos !== p.pos || top[i + 1].tier !== p.tier);
+      const key = `${p.pos}|${p.tier}`;
+      const seen = (tierSeen.get(key) ?? 0) + 1;
+      tierSeen.set(key, seen);
+      const tiered = !untiered.has(p.pos);
+      // Counted against the whole board, not the printed slice: a tier that
+      // runs on past the cut has not been exhausted by the last row shown.
+      const tierBreak = tiered && seen === tierTotal.get(key);
       return `<tr class="${tierBreak ? "tier-end" : ""}">
       <td class="num">${i + 1}</td>
       <td>${escapeHtml(p.name)}</td>
@@ -70,7 +96,7 @@ export function renderCheatsheet(input: CheatsheetInput): string {
       <td class="num">${p.adp.toFixed(1)}</td>
       <td class="num">${p.proj_points.toFixed(0)}</td>
       <td class="num">${(p.vor ?? 0).toFixed(0)}</td>
-      <td class="num">${p.pos}${p.tier}</td>
+      <td class="num">${tiered ? `${p.pos}${p.tier}` : "&mdash;"}</td>
       <td class="num">${p.bye ?? "-"}</td>
     </tr>`;
     })
@@ -170,7 +196,7 @@ ${rows}
       <section>
         <h2>Reading it</h2>
         <ul>
-          <li>Heavy rules are tier breaks. Being last in a tier is the only good reason to reach.</li>
+          <li>A heavy rule under a player means he is the last of his tier. Being last in a tier is the only good reason to reach.</li>
           <li>VOR is against replacement, not against the field.</li>
           <li>K and DST last. They are near-random year to year.</li>
         </ul>

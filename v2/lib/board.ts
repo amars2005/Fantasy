@@ -18,7 +18,7 @@ import { columnIndex, roundTo, type ColumnarTable } from "./bundle";
 import { fitCurves, projectPlayers, type BoardEntry } from "./project";
 import { projectKdst } from "./kdst";
 import { addPlayoffLift, teamScheduleStrength } from "./schedule";
-import { addTiers } from "./tiers";
+import { addTiers, untieredPositions } from "./tiers";
 import { addVor, replacementLevels } from "./replacement";
 import { snakePicks } from "./simDraft";
 import { positionDropoff, vonaTable, type Dropoff } from "./vona";
@@ -279,6 +279,11 @@ export class DraftBoard {
       tierLeft.set(key, (tierLeft.get(key) ?? 0) + 1);
     }
 
+    // ...but only where a tier means something. Asked of the whole board, not
+    // of what is left: whether the fit could separate a position is a property
+    // of the fit, and does not change as players come off.
+    const untiered = untieredPositions(this.players);
+
     // Bye collisions: how many players already on our roster share this
     // candidate's bye. Stacking starters on one week is worth seeing, not
     // worth reaching for.
@@ -291,6 +296,7 @@ export class DraftBoard {
 
     const recommendations = table.slice(0, n).map((p) => ({
       ...p,
+      tiered: !untiered.has(p.pos),
       tier_left: tierLeft.get(`${p.pos}|${p.tier}`) ?? 0,
       bye_conflicts: p.bye != null ? (myByes.get(p.bye) ?? 0) : 0,
     }));

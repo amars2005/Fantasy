@@ -49,18 +49,29 @@ const tierLeft = (p: Player) => (p as Player & { tier_left?: number }).tier_left
 const byeConflicts = (p: Player) =>
   (p as Player & { bye_conflicts?: number }).bye_conflicts ?? 0;
 
+/**
+ * Whether this player's position has tiers worth printing.
+ *
+ * Kickers and defences each land in a tier of their own -- the fit genuinely
+ * cannot pool them -- so the number is a rank in disguise and "1 left" reads as
+ * scarcity where there is none. `untieredPositions` decides; here we just do
+ * not print what it says is meaningless.
+ */
+const isTiered = (p: Player) => (p as Player & { tiered?: boolean }).tiered !== false;
+const NO_TIER = "—";
+
 const STAT_COLUMNS: {
   key: string;
   label: string;
   value: (p: Player) => string;
   className?: (p: Player) => string;
 }[] = [
-  { key: "tier", label: "Tier", value: (p) => String(p.tier ?? "-") },
+  { key: "tier", label: "Tier", value: (p) => (isTiered(p) ? String(p.tier ?? "-") : NO_TIER) },
   {
     key: "left",
     label: "Left",
-    value: (p) => String(tierLeft(p)),
-    className: (p) => (tierLeft(p) <= 2 ? "scarce" : ""),
+    value: (p) => (isTiered(p) ? String(tierLeft(p)) : NO_TIER),
+    className: (p) => (isTiered(p) && tierLeft(p) <= 2 ? "scarce" : ""),
   },
   { key: "adp", label: "ADP", value: (p) => p.adp.toFixed(1) },
   { key: "proj", label: "Proj", value: (p) => p.proj_points.toFixed(0) },

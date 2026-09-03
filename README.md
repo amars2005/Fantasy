@@ -74,6 +74,41 @@ that measured spread rather than an assumed one.
 Isotonic regression also gives tiers for free. Where the fit plateaus, the data
 genuinely cannot separate those players — that plateau *is* the tier.
 
+### What the Tier and Left columns mean
+
+Tiers are **within a position**, and numbered from 1 down. A WR tier 2 and an RB
+tier 2 have nothing to do with each other; the position sits next to the number
+on the board for exactly that reason. **Left** is how many players in that tier
+are still on the board, the player himself included, so `1` means he is the last
+of his kind — the only good reason to reach.
+
+On the reference 14-team board that gives:
+
+| | players | tiers | mean tier size | biggest |
+|---|---|---|---|---|
+| QB | 32 | 11 | 2.9 | 8 |
+| RB | 71 | 16 | 4.4 | 15 |
+| WR | 90 | 20 | 4.5 | 20 |
+| TE | 27 | 9 | 3.0 | 8 |
+| K | 24 | 24 | 1.0 | 1 |
+| DST | 27 | 27 | 1.0 | 1 |
+
+Kickers and defences are the exception, and it is not a bug in the fit. Their
+curve is fitted on *outcome* rank rather than draft rank — kicker season points
+have a year-over-year correlation near zero, so there is nothing better to be
+had — and that fit separates all of them. Every kicker lands in a tier of one.
+
+A column reading 1, 2, 3 … 27 down the defences is a rank wearing a tier's
+clothes, and "1 left in this tier" against every one of them reads as scarcity
+where there is none. So the board prints **—** for the tier and the count at any
+position where the fit pooled nobody, rather than a number that cannot mean what
+the column says it means.
+
+Tagging a player under **News & risk** moves him to the tier his re-priced
+projection earns. The rung is looked up on the existing ladder rather than
+recomputed, so tagging one receiver never renumbers the tiers printed against
+the others.
+
 ## Value over replacement
 
 Replacement level is derived, not hardcoded. Base starters come from the league

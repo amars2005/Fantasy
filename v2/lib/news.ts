@@ -126,6 +126,36 @@ function availability(player: Player, tag: NewsTag): number {
   return Math.min(1, Math.max(0, (season - missed) / season));
 }
 
+/** One rung of a position's tier ladder: the tier, and the points it is worth. */
+interface TierStep {
+  tier: number;
+  points: number;
+}
+
+/**
+ * The tier ladder per position, as the market had it.
+ *
+ * Built from the untagged board on purpose. Tiers are plateaus in the fitted
+ * curve, so one tagged player's re-priced number must not become a rung that
+ * another tagged player can be placed on.
+ */
+function tierLadders(players: Player[]): Map<string, TierStep[]> {
+  const ladders = new Map<string, TierStep[]>();
+  for (const p of players) {
+    if (p.tier === undefined || p.tier_points === undefined) continue;
+    let ladder = ladders.get(p.pos);
+    if (!ladder) {
+      ladder = [];
+      ladders.set(p.pos, ladder);
+    }
+    if (!ladder.some((step) => step.tier === p.tier)) {
+      ladder.push({ tier: p.tier, points: p.tier_points });
+    }
+  }
+  for (const ladder of ladders.values()) ladder.sort((a, b) => a.tier - b.tier);
+  return ladders;
+}
+
 /**
  * Re-price a board against what you know.
  *
@@ -135,12 +165,15 @@ function availability(player: Player, tag: NewsTag): number {
 export function applyNews(players: Player[], news: NewsMap): Player[] {
   if (!news || Object.keys(news).length === 0) return players;
 
-  return players.map((p) => {
+  const ladders = tierLadders(players);
+
+  const repriced = players.map((p) => {
     const tag = news[p.player_id];
     if (!tag || isEmptyTag(tag)) return p;
 
     const share = availability(p, tag);
     const projRaw = (p.proj_raw ?? p.proj_points) * share;
+    const points = roundTo(projRaw, 1);
     const gamesRaw = Math.max(0, (p.games_raw ?? p.games) - (tag.avoid ? Infinity : tag.gamesMissed || 0));
 
     // Only the latent mean moves. `adp` stays as the market reported it: the
@@ -148,15 +181,44 @@ export function applyNews(players: Player[], news: NewsMap): Player[] {
     // and conflating the two would hide which is which on the board.
     const mu = Number.isFinite(p.adp_mu) ? p.adp_mu : p.adp;
 
+    // Re-price him into the tier his new projection earns.
+    //
+    // A tier is the answer to "is he the last of his kind", and leaving it
+    // alone made that answer a lie in the one case it is most costly: tag a
+    // receiver as out half the season and he kept his tier 1 badge, with the
+    // board still reporting one left in the tier -- reach now -- about a player
+    // you had just written down.
+    //
+    // The rung is looked up rather than recomputed. Re-running the tiering on
+    // adjusted points would insert a new distinct value into the position and
+    // renumber every tier below it, so tagging one receiver would silently
+    // shift the tier printed against all the others.
+    const ladder = ladders.get(p.pos);
+    const step = ladder?.find((rung) => rung.points <= points) ?? ladder?.[ladder.length - 1];
+
     return {
       ...p,
-      proj_points: roundTo(projRaw, 1),
+      proj_points: points,
       proj_raw: projRaw,
       games: roundTo(gamesRaw, 1),
       games_raw: gamesRaw,
       adp_mu: mu + (tag.adpShift || 0),
+      tier: step?.tier ?? p.tier,
+      tier_points: step?.points ?? p.tier_points,
       news: tag,
       proj_before_news: p.proj_points,
     };
+  });
+
+  // `tier_size` is the count of a tier's members, and players have just moved
+  // between tiers.
+  const sizes = new Map<string, number>();
+  for (const p of repriced) {
+    const key = `${p.pos}|${p.tier}`;
+    sizes.set(key, (sizes.get(key) ?? 0) + 1);
+  }
+  return repriced.map((p) => {
+    const size = sizes.get(`${p.pos}|${p.tier}`);
+    return size === p.tier_size ? p : { ...p, tier_size: size };
   });
 }
