@@ -275,6 +275,10 @@ tbody tr:hover {
 .DST { background: rgba(100, 116, 139, 0.2); color: var(--dst); }
 
 .name { font-weight: 550; }
+/* The spread beside a projection: present, and deliberately quieter than the
+   number it qualifies. */
+.spread { color: var(--dim); }
+.boardnote { padding: 0 14px 12px; margin-top: 0; }
 .vona { font-weight: 700; color: var(--good); }
 .muted { color: var(--dim); font-size: 12px; }
 .scarce { color: var(--hot); font-weight: 700; }

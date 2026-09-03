@@ -95,6 +95,7 @@ export function renderCheatsheet(input: CheatsheetInput): string {
       <td>${escapeHtml(p.tm ?? "")}</td>
       <td class="num">${p.adp.toFixed(1)}</td>
       <td class="num">${p.proj_points.toFixed(0)}</td>
+      <td class="num dim">${(p.sd ?? 0).toFixed(0)}</td>
       <td class="num">${(p.vor ?? 0).toFixed(0)}</td>
       <td class="num">${tiered ? `${p.pos}${p.tier}` : "&mdash;"}</td>
       <td class="num">${p.bye ?? "-"}</td>
@@ -139,6 +140,7 @@ export function renderCheatsheet(input: CheatsheetInput): string {
        border-bottom: 1px solid #d6dae1; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   tr.tier-end td { border-bottom: 2px solid #b9c0cb; }
+  td.dim { color: #8a919c; }
   .pos { font-weight: 600; font-size: 10px; }
   .QB { color: #b3452f; } .RB { color: #1f7a4d; } .WR { color: #2454a6; }
   .TE { color: #8a5a1a; } .K  { color: #6b7280; } .DST { color: #55507a; }
@@ -169,7 +171,7 @@ export function renderCheatsheet(input: CheatsheetInput): string {
         <thead>
           <tr>
             <th class="num">#</th><th>Player</th><th>Pos</th><th>Tm</th>
-            <th class="num">ADP</th><th class="num">Proj</th>
+            <th class="num">ADP</th><th class="num">Proj</th><th class="num">&plusmn;</th>
             <th class="num">VOR</th><th class="num">Tier</th><th class="num">Bye</th>
           </tr>
         </thead>
@@ -197,6 +199,7 @@ ${rows}
         <h2>Reading it</h2>
         <ul>
           <li>A heavy rule under a player means he is the last of his tier. Being last in a tier is the only good reason to reach.</li>
+          <li>Proj is read off a curve of draft rank against what players at that rank actually scored, so a tier shares one number. &plusmn; is the measured spread around it — wide enough that the projection is the middle of a range, not a forecast.</li>
           <li>VOR is against replacement, not against the field.</li>
           <li>K and DST last. They are near-random year to year.</li>
         </ul>

@@ -75,6 +75,11 @@ const STAT_COLUMNS: {
   },
   { key: "adp", label: "ADP", value: (p) => p.adp.toFixed(1) },
   { key: "proj", label: "Proj", value: (p) => p.proj_points.toFixed(0) },
+  // The measured spread of what players at this rank actually went on to
+  // score. It is large -- around 100 points on the first running back -- and
+  // printing the projection without it invites reading three significant
+  // figures off a number that is an average over a decade of seasons.
+  { key: "sd", label: "\u00b1", value: (p) => (p.sd ?? 0).toFixed(0), className: () => "spread" },
   { key: "vona", label: "VONA", value: (p) => (p.vona ?? 0).toFixed(1), className: () => "vona" },
   {
     key: "survives",
@@ -722,6 +727,15 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                 );
               })}
             </ul>
+
+            <div className="hint boardnote">
+              Proj is read off a fitted curve of positional draft rank against
+              what players at that rank have actually scored, so players the
+              data cannot separate share a number — that is what a tier is.
+              <b> &plusmn;</b> is the measured spread around it, and it is
+              wide: treat the projection as the middle of a range, not a
+              forecast.
+            </div>
           </div>
         </div>
 

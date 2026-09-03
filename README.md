@@ -74,6 +74,41 @@ that measured spread rather than an assumed one.
 Isotonic regression also gives tiers for free. Where the fit plateaus, the data
 genuinely cannot separate those players — that plateau *is* the tier.
 
+### What Proj means, and why a tier shares one number
+
+A projection is the fitted curve read at a player's positional draft rank. It
+is a function of that rank and nothing else — no per-player component — so two
+players the fit could not separate get the *same* number by construction. That
+is not a display bug; it is what a tier is.
+
+The plateaus land where you would want them. On the reference board every tier
+is a contiguous run of positional ranks, tight at the top and wide at the
+bottom, because that is where the market's information actually runs out:
+
+| | tier 1 | tier 2 | tier 3 | … | widest plateau |
+|---|---|---|---|---|---|
+| RB | ranks 1-4 | 5-7 | 8-11 | | ranks 47-61 (15) |
+| WR | ranks 1-2 | 3-5 | 6-7 | | ranks 71-90 (20) |
+| QB | ranks 1-2 | 3-5 | 6 | | ranks 25-32 (8) |
+| TE | rank 1 | 2 | 3 | | ranks 9-16 (8) |
+
+Rounding to one decimal merges nothing: tiering the unrounded fit gives an
+identical tier count at every position.
+
+The number that qualifies all of this is the **±** column — the measured spread
+of what players at that rank went on to score, and it is not small:
+
+| | rank 1 | rank 5 | rank 12 | rank 30 |
+|---|---|---|---|---|
+| RB | 255 ± 100 | 247 ± 98 | 211 ± 80 | 134 ± 72 |
+| WR | 269 ± 84 | 249 ± 77 | 214 ± 75 | 157 ± 69 |
+| QB | 319 ± 71 | 284 ± 87 | 243 ± 85 | 184 ± 86 |
+| TE | 219 ± 60 | 157 ± 58 | 128 ± 57 | — |
+
+The gap between adjacent tiers is routinely smaller than the spread within one.
+Treat a projection as the middle of a range, not a forecast — which is also why
+the board is ranked by VONA rather than by projected points.
+
 ### What the Tier and Left columns mean
 
 Tiers are **within a position**, and numbered from 1 down. A WR tier 2 and an RB
