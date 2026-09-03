@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 
-import { deriveBoard } from "./board";
+import { deriveBoard, toLeaguePickSpace } from "./board";
 import { adpAsOf, loadBundleFor } from "./bundleLoader";
 import { anchorWarnings, nearestFfcFormat, validateLeague } from "./config";
 import { getStore, type LeagueRecord, type PickRecord } from "./store";
@@ -82,7 +82,17 @@ export async function getLeagueView(id: string): Promise<LeagueView | null> {
   const stale = currentHash !== league.boardHash;
 
   return {
-    league,
+    // The stored board is in the bundle's own 12-team pick space, which is what
+    // the bundle means and what the golden fixtures pin. Converting on the way
+    // out rather than at write time means every league gets the correction at
+    // once, with no stored board to migrate and no board moving underneath a
+    // draft that is already running.
+    league: {
+      ...league,
+      board: league.board
+        ? toLeaguePickSpace(league.board, league.config.teams)
+        : null,
+    },
     picks,
     warnings: anchorWarnings(league.config),
     refreshAvailable: stale && league.frozenAt !== null,

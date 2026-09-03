@@ -16,7 +16,9 @@ import {
   createLeague,
   markBySearch,
   onTheClock,
+  recentPickNumbers,
   recommendedNames,
+  setPickOrderLock,
   waitForBoard,
   waitForPicksOnServer,
 } from "./helpers";
@@ -28,6 +30,8 @@ test.describe("state survives a reload", () => {
     const league = await createLeague(request, "Reload league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     expect(await onTheClock(page)).toBe(1);
 
@@ -50,6 +54,8 @@ test.describe("state survives a reload", () => {
     const league = await createLeague(request, "No resurrection");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     const before = await recommendedNames(page);
     const taken = before[0];
@@ -88,6 +94,8 @@ test.describe("state survives a reload", () => {
     const league = await createLeague(request, "Unknown pick");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     await page.getByRole("button", { name: /not on the board/i }).click();
     await expect.poll(() => onTheClock(page)).toBe(2);
@@ -103,6 +111,8 @@ test.describe("state survives a reload", () => {
     const league = await createLeague(request, "Undo league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     await markBySearch(page, "a");
     await expect.poll(() => onTheClock(page)).toBe(2);
@@ -123,6 +133,13 @@ test.describe("state survives a reload", () => {
     expect(picks.length).toBe(2);
     expect(picks.filter((p: { voidedAt: string | null }) => p.voidedAt !== null).length).toBe(1);
     expect(picks.map((p: { seq: number }) => p.seq)).toEqual([1, 2]);
+
+    // ...but `seq` is a storage key, and the pick's *number* is its place in
+    // the draft. Marking again after an undo used to label the new pick 3 in a
+    // draft that had only ever reached 2.
+    await markBySearch(page, "c");
+    await expect.poll(() => onTheClock(page)).toBe(3);
+    await expect(recentPickNumbers(page)).resolves.toEqual(["2", "1"]);
   });
 });
 
@@ -134,6 +151,8 @@ test.describe("reconciling across tabs", () => {
 
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     const second = await context.newPage();
     await second.goto(`/league/${league.id}`);
@@ -163,6 +182,8 @@ test.describe("refreshing the board itself", () => {
     const league = await createLeague(request, "Freeze league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     // Fingerprint the stored board. This -- not the visible ordering, which
     // legitimately shifts as players come off -- is what must not move.
@@ -209,6 +230,8 @@ test.describe("refreshing the board itself", () => {
     const league = await createLeague(request, "Explicit refresh");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     await markBySearch(page, "a");
     await expect.poll(() => onTheClock(page)).toBe(2);

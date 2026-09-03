@@ -51,6 +51,32 @@ export async function recommendedNames(page: Page): Promise<string[]> {
   return page.locator("main.board table tbody tr td.name").allInnerTexts();
 }
 
+/**
+ * Turn the pick-order lock on or off.
+ *
+ * With it on -- the default -- only the call the clock allows is offered:
+ * "gone" while the room is picking, "mine" on your own. Tests that drive the
+ * board out of turn have to say so.
+ */
+export async function setPickOrderLock(page: Page, on: boolean): Promise<void> {
+  const box = page.locator("#lockorder");
+  if (on) await box.check();
+  else await box.uncheck();
+}
+
+/**
+ * The numbers down the left of "Recent picks", newest first.
+ *
+ * These are pick numbers -- a pick's place in the draft -- not the `seq`
+ * storage key, which keeps climbing past an undone pick.
+ */
+export async function recentPickNumbers(page: Page): Promise<string[]> {
+  return page
+    .locator("main.board .rail-left .panel", { hasText: "Recent picks" })
+    .locator(".slot .lbl")
+    .allInnerTexts();
+}
+
 /** The "on the clock" number from the header. */
 export async function onTheClock(page: Page): Promise<number> {
   const text = await page.locator("header.app .stat").first().locator("b").innerText();

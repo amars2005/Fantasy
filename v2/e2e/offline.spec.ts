@@ -8,7 +8,13 @@
 
 import { expect, test } from "@playwright/test";
 
-import { createLeague, markBySearch, onTheClock, waitForBoard } from "./helpers";
+import {
+  createLeague,
+  markBySearch,
+  onTheClock,
+  setPickOrderLock,
+  waitForBoard,
+} from "./helpers";
 
 test.describe("offline", () => {
   test("the board keeps working and queues picks while offline", async ({
@@ -19,6 +25,8 @@ test.describe("offline", () => {
     const league = await createLeague(request, "Disconnected");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     await context.setOffline(true);
 
@@ -42,6 +50,8 @@ test.describe("offline", () => {
     const league = await createLeague(request, "Flush league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     await context.setOffline(true);
     await markBySearch(page, "a");
@@ -77,6 +87,8 @@ test.describe("offline", () => {
     const league = await createLeague(request, "Cache league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
     await markBySearch(page, "a");
     await expect.poll(() => onTheClock(page)).toBe(2);
 

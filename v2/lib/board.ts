@@ -51,6 +51,66 @@ function toBoardEntries(table: ColumnarTable): BoardEntry[] {
 }
 
 /**
+ * The team count Fantasy Football Calculator's ADP is drawn from.
+ *
+ * Their API takes a `teams` parameter and ignores it -- verified 2026-08-30,
+ * `teams=12` and `teams=14` return byte-identical ADP for all 271 players on
+ * every scoring format -- so there is exactly one ADP, and it is a 12-team one.
+ */
+export const ADP_TEAMS = 12;
+
+/**
+ * Re-express ADP in this league's pick numbers.
+ *
+ * ADP is an *overall pick number*, and an overall pick number only means
+ * something alongside a team count. The board compares it against pick numbers
+ * from this league's snake, so a 12-team ADP read into a 14-team draft is two
+ * different rulers held against each other.
+ *
+ * The conversion is not uniform, because the two halves of a board are drafted
+ * on different logic:
+ *
+ *   * A skill player's pick number is set by how many players are better than
+ *     him. Every team drafts skill players continuously from the first round,
+ *     so the 100th-best running back comes off around the 100th pick whatever
+ *     the league size. His ADP needs no adjustment.
+ *
+ *   * A kicker or a defence is drafted to fill a roster slot, in the last
+ *     rounds, once the starters are done. That is a *round*, not a rank -- and
+ *     a round is `teams` picks wide. In the 2026-08-29 snapshot the first
+ *     defence goes at 82.1, round 7 of a 12-team draft; the same moment in a
+ *     14-team draft is pick 96. So their pick numbers scale with team count.
+ *
+ * Left uncorrected this is the bias you notice as the board pushing a defence
+ * at you a round or two early in a big league: it has them coming off at pick
+ * 82 while the room is still four rounds from touching one, so they look
+ * scarce, `p_survives` collapses and VONA spikes on a position worth almost
+ * nothing. In an eight-team league the error runs the other way.
+ *
+ * `stdev` scales with them: the spread is roughly a constant number of rounds,
+ * which is a growing number of picks. `adp_mu` is the calibrated latent mean in
+ * the same units, so it scales too.
+ */
+export function toLeaguePickSpace<T extends Player>(players: T[], teams: number): T[] {
+  const scale = teams / ADP_TEAMS;
+  if (!Number.isFinite(scale) || scale <= 0 || scale === 1) return players;
+
+  return players
+    .map((p) => {
+      if (p.pos !== "K" && p.pos !== "DST") return p;
+      return {
+        ...p,
+        adp: p.adp * scale,
+        adp_mu: p.adp_mu * scale,
+        stdev: (p.stdev ?? 0) * scale,
+      };
+    })
+    // The board is handed on in ADP order, and moving the kickers has changed
+    // it.
+    .sort((a, b) => a.adp - b.adp);
+}
+
+/**
  * Build a league's board: projections, value, tiers.
  *
  * This is the only place league scoring enters. Everything downstream reads

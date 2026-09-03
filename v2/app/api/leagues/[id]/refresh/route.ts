@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { toLeaguePickSpace } from "../../../../../lib/board";
+
 import { refreshBoard } from "../../../../../lib/leagues";
 
 export const runtime = "nodejs";
@@ -22,6 +24,6 @@ export async function POST(
   return NextResponse.json({
     id: league.id,
     adpAsOf: league.adpAsOf,
-    board: league.board,
+    board: league.board ? toLeaguePickSpace(league.board, league.config.teams) : null,
   });
 }

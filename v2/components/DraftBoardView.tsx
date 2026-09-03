@@ -30,6 +30,7 @@ interface LeaguePayload {
 const cacheKey = (id: string) => `fantasy.v2.league.${id}`;
 const slotKey = (id: string) => `fantasy.v2.slot.${id}`;
 const newsKey = (id: string) => `fantasy.v2.news.${id}`;
+const lockKey = (id: string) => `fantasy.v2.lock.${id}`;
 
 /**
  * One number about a player, named once.
@@ -85,13 +86,39 @@ const statsFor = (p: Player): StatCell[] =>
     className: c.className?.(p),
   }));
 
+/**
+ * Whether each call is available, and why not.
+ *
+ * The room cannot take a player on my pick and I cannot take one on theirs, so
+ * with the order locked only one of the two buttons is live at a time.
+ */
+interface PickGate {
+  gone: boolean;
+  mine: boolean;
+  reason: string | null;
+}
+
+function pickGate(locked: boolean, onMyPick: boolean, myNextPick: number | null): PickGate {
+  if (!locked) return { gone: true, mine: true, reason: null };
+  return {
+    gone: !onMyPick,
+    mine: onMyPick,
+    reason: onMyPick
+      ? "It is your pick. Untick “one call per pick” below to mark it for the room."
+      : `Not your pick — you are next at ${myNextPick ?? "-"}. Untick “one call ` +
+        "per pick” below to take him anyway.",
+  };
+}
+
 /** The three buttons that follow a player everywhere he is offered. */
 function PickButtons({
   playerId,
+  gate,
   onNews,
   onMark,
 }: {
   playerId: string;
+  gate: PickGate;
   onNews: (id: string) => void;
   onMark: (id: string, takenBy: "me" | "other") => void;
 }) {
@@ -104,10 +131,21 @@ function PickButtons({
       >
         News
       </button>
-      <button type="button" onClick={() => onMark(playerId, "other")}>
+      <button
+        type="button"
+        disabled={!gate.gone}
+        title={gate.gone ? undefined : (gate.reason ?? undefined)}
+        onClick={() => onMark(playerId, "other")}
+      >
         Gone
       </button>
-      <button type="button" className="mine" onClick={() => onMark(playerId, "me")}>
+      <button
+        type="button"
+        className="mine"
+        disabled={!gate.mine}
+        title={gate.mine ? undefined : (gate.reason ?? undefined)}
+        onClick={() => onMark(playerId, "me")}
+      >
         Mine
       </button>
     </>
@@ -150,6 +188,13 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
    */
   const [openStats, setOpenStats] = useState<Record<string, boolean>>({});
   const [allStats, setAllStats] = useState(false);
+  /**
+   * Only offer the call that the clock allows: "gone" when the room is
+   * picking, "mine" when I am. Kept switchable, because the clock is derived
+   * from a pick count and a slot -- if the room traded picks, or the app missed
+   * one, the lock would be enforcing an order the room is not in.
+   */
+  const [lockOrder, setLockOrder] = useState(true);
   const searchRef = useRef<HTMLInputElement>(null);
 
   /** Picks written optimistically but not yet acknowledged by the server. */
@@ -187,6 +232,8 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
       if (saved) setSlot(Number(saved));
       const savedNews = window.localStorage.getItem(newsKey(leagueId));
       if (savedNews) setNews(JSON.parse(savedNews) as NewsMap);
+      const savedLock = window.localStorage.getItem(lockKey(leagueId));
+      if (savedLock !== null) setLockOrder(savedLock === "1");
     } catch {
       /* storage blocked, or a tag written by an older version */
     }
@@ -208,6 +255,14 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
       /* storage blocked */
     }
   }, [leagueId, slot]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(lockKey(leagueId), lockOrder ? "1" : "0");
+    } catch {
+      /* storage blocked */
+    }
+  }, [leagueId, lockOrder]);
 
   useEffect(() => {
     try {
@@ -302,6 +357,14 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
 
   const mark = useCallback(
     (playerId: string | null, takenBy: "me" | "other") => {
+      // Every path in -- keyboard, table, card, search result -- lands here, so
+      // the lock is enforced once rather than at each button.
+      if (lockOrder && recommendation) {
+        const onMyPick = recommendation.my_next_pick === recommendation.on_the_clock;
+        if ((takenBy === "me") !== onMyPick) return;
+      }
+      // `seq` is a storage key, not a pick number: it keeps climbing past an
+      // undone pick so a retry of that pick still lands on the same row.
       const seq = Math.max(0, ...picks.map((p) => p.seq)) + 1;
       const pick: Pick = { seq, playerId, takenBy, voidedAt: null };
       setPicks((prev) => [...prev, pick]);
@@ -313,7 +376,7 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
       // keyboard is what marked the pick.
       if (document.activeElement === searchRef.current) searchRef.current?.focus();
     },
-    [picks, send],
+    [picks, send, lockOrder, recommendation],
   );
 
   const undoLast = useCallback(() => {
@@ -350,6 +413,7 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
   }
 
   const mine = recommendation.my_next_pick === recommendation.on_the_clock;
+  const gate = pickGate(lockOrder, mine, recommendation.my_next_pick);
 
   return (
     <>
@@ -420,6 +484,7 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                   <span className="acts">
                     <PickButtons
                       playerId={p.player_id}
+                      gate={gate}
                       onNews={setEditingNews}
                       onMark={mark}
                     />
@@ -428,13 +493,29 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
               ))}
 
               <div className="markrow">
-                <button type="button" onClick={() => mark(null, "other")}>
+                <button
+                  type="button"
+                  disabled={!gate.gone}
+                  title={gate.gone ? undefined : (gate.reason ?? undefined)}
+                  onClick={() => mark(null, "other")}
+                >
                   Someone took a player not on the board
                 </button>
                 <button type="button" onClick={undoLast} disabled={!active.length}>
                   Undo
                 </button>
               </div>
+
+              <label className="checkline lock" htmlFor="lockorder">
+                <input
+                  id="lockorder"
+                  type="checkbox"
+                  checked={lockOrder}
+                  onChange={(e) => setLockOrder(e.target.checked)}
+                />
+                One call per pick —{" "}
+                {mine ? "yours, so only Mine" : "the room's, so only Gone"}
+              </label>
             </div>
           </div>
         </div>
@@ -539,6 +620,7 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                         <span className="acts end">
                           <PickButtons
                             playerId={p.player_id}
+                            gate={gate}
                             onNews={setEditingNews}
                             onMark={mark}
                           />
@@ -581,12 +663,19 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                     </div>
 
                     <div className="cardacts">
-                      <button type="button" onClick={() => mark(p.player_id, "other")}>
+                      <button
+                        type="button"
+                        disabled={!gate.gone}
+                        title={gate.gone ? undefined : (gate.reason ?? undefined)}
+                        onClick={() => mark(p.player_id, "other")}
+                      >
                         Gone
                       </button>
                       <button
                         type="button"
                         className="mine"
+                        disabled={!gate.mine}
+                        title={gate.mine ? undefined : (gate.reason ?? undefined)}
                         onClick={() => mark(p.player_id, "me")}
                       >
                         Mine
@@ -638,14 +727,19 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
             <h2>Recent picks</h2>
             <div className="body">
               {active.length === 0 && <div className="empty">Nothing yet.</div>}
-              {[...active]
+              {active
+                // The pick's number is its place in the draft, which is its
+                // position in the live list. `seq` is a storage key and keeps
+                // climbing past an undone pick, so showing it labelled the pick
+                // after an undo with a number the draft had never reached.
+                .map((p, i) => ({ pick: p, number: i + 1 }))
                 .reverse()
                 .slice(0, 12)
-                .map((p) => {
+                .map(({ pick: p, number }) => {
                   const player = league.board.find((b) => b.player_id === p.playerId);
                   return (
                     <div className="slot" key={p.seq}>
-                      <span className="lbl">{p.seq}</span>
+                      <span className="lbl">{number}</span>
                       <span style={{ flex: 1, textAlign: "left", paddingLeft: 8 }}>
                         {player ? (
                           <>

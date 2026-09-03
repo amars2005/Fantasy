@@ -273,6 +273,46 @@ All free, all verified live during the build.
 ADP data courtesy of [Fantasy Football Calculator](https://fantasyfootballcalculator.com).
 Cached to disk and refreshed at most every 12 hours, per their request.
 
+### The ADP here is not ESPN's
+
+FFC's ADP is the consensus of their own mock drafts — 8,162 of them in the
+2026-08-29 snapshot. ESPN, Yahoo and Sleeper each publish their own, from their
+own drafters, and they disagree, most visibly on the positions with the least
+separation between them. In that snapshot FFC has Seattle as the first defence
+off the board at 82.1 with Houston third at 98.1; ESPN had Houston first. Both
+are real numbers about real rooms, and neither is the room you are drafting in.
+
+FFC is used because of what it carries that a ranking list does not: `stdev`,
+`high` and `low`, the *distribution* of where a player goes. Pick-survival
+probability — and so VONA, the number the board is ranked by — is built on that
+distribution, not on the mean. A source without it could not answer "will he
+still be there at my next pick", which is the only question the board asks.
+
+If the room you are in prices a player differently, say so: tag him under **News
+& risk** with the pick he really slides to. That is exactly what the field is
+for.
+
+### ADP is a pick number, and a pick number needs a team count
+
+FFC's API takes a `teams` parameter and ignores it — verified 2026-08-30,
+`teams=12` and `teams=14` return byte-identical ADP for all 271 players on every
+scoring format. So there is one ADP, and it is a 12-team one.
+
+That matters for kickers and defences, and only for them. A skill player's pick
+number is set by how many players are better than him, and every team drafts
+skill players continuously from round one, so the 100th-best running back comes
+off around the 100th pick whatever the league size. A kicker or a defence is
+drafted to fill a roster slot once the starters are done — that is a *round*,
+and a round is `teams` picks wide. The first defence at 82.1 is round 7 of a
+12-team draft; the same moment in a 14-team draft is pick 96.
+
+Left uncorrected that is a real bias, and it grows with league size: the board
+has defences coming off at pick 82 while a 14-team room is still four rounds
+from touching one, so they look scarce, survival collapses and VONA spikes on a
+position worth almost nothing. `to_league_pick_space` (`src/draft/board.py`, and
+`toLeaguePickSpace` in `v2/lib/board.ts`) scales K and DST — `adp`, `adp_mu` and
+`stdev` alike — by `teams / 12`. An eight-team league is corrected the other way.
+
 `nfl_data_py` is deprecated — this uses `nflreadpy`, its replacement.
 
 ## Identity resolution

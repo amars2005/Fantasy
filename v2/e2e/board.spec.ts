@@ -14,6 +14,7 @@ import {
   markBySearch,
   onTheClock,
   recommendedNames,
+  setPickOrderLock,
   superflex,
   waitForBoard,
 } from "./helpers";
@@ -23,6 +24,8 @@ test.describe("marking picks", () => {
     const league = await createLeague(request, "Keyboard league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     const name = await markBySearch(page, "a", false);
 
@@ -47,6 +50,8 @@ test.describe("marking picks", () => {
     const league = await createLeague(request, "Focus league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     const search = page.locator('input[type="search"]');
     await markBySearch(page, "a");
@@ -59,6 +64,8 @@ test.describe("marking picks", () => {
     const league = await createLeague(request, "Rerank league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     const before = await recommendedNames(page);
     await page.locator("main.board table tbody tr").first()
@@ -75,6 +82,8 @@ test.describe("marking picks", () => {
     const league = await createLeague(request, "Urgency league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     const urgencyOrder = async () =>
       page.locator("main.board .rail-right .urgrow .pos").allInnerTexts();
@@ -90,6 +99,65 @@ test.describe("marking picks", () => {
 
     const after = await urgencyOrder();
     expect(after).not.toEqual(before);
+  });
+});
+
+test.describe("one call per pick", () => {
+  // The room cannot take a player on your pick and you cannot take one on
+  // theirs. Slot 1 of 14 picks at 1, then not again until 28.
+  const firstRow = (page: import("@playwright/test").Page) =>
+    page.locator("main.board table tbody tr").first();
+
+  test("offers only the call the clock allows", async ({ page, request }) => {
+    const league = await createLeague(request, "Order league");
+    await page.goto(`/league/${league.id}`);
+    await waitForBoard(page);
+
+    // Pick 1 is mine.
+    await expect(firstRow(page).getByRole("button", { name: "Gone" })).toBeDisabled();
+    await expect(firstRow(page).getByRole("button", { name: "Mine" })).toBeEnabled();
+
+    await firstRow(page).getByRole("button", { name: "Mine" }).click();
+    await expect.poll(() => onTheClock(page)).toBe(2);
+
+    // Pick 2 is the room's, and stays that way until 28.
+    await expect(firstRow(page).getByRole("button", { name: "Gone" })).toBeEnabled();
+    await expect(firstRow(page).getByRole("button", { name: "Mine" })).toBeDisabled();
+  });
+
+  test("the keyboard obeys the same rule as the buttons", async ({ page, request }) => {
+    const league = await createLeague(request, "Order keyboard");
+    await page.goto(`/league/${league.id}`);
+    await waitForBoard(page);
+
+    // Plain Enter is "taken by someone else", which pick 1 is not.
+    const search = page.locator('input[type="search"]');
+    await search.fill("a");
+    await page.locator("main.board .panel .slot .name").first().waitFor({ state: "visible" });
+    await search.press("Enter");
+    await page.waitForTimeout(300);
+    expect(await onTheClock(page)).toBe(1);
+  });
+
+  test("unticking it hands both calls back", async ({ page, request }) => {
+    // The clock is derived from a pick count and a slot. If the room traded
+    // picks, or the app missed one, the lock would be enforcing an order the
+    // room is not in -- so it has to be possible to overrule.
+    const league = await createLeague(request, "Order override");
+    await page.goto(`/league/${league.id}`);
+    await waitForBoard(page);
+    await setPickOrderLock(page, false);
+
+    await expect(firstRow(page).getByRole("button", { name: "Gone" })).toBeEnabled();
+    await expect(firstRow(page).getByRole("button", { name: "Mine" })).toBeEnabled();
+
+    await firstRow(page).getByRole("button", { name: "Gone" }).click();
+    await expect.poll(() => onTheClock(page)).toBe(2);
+
+    // And the choice outlives the tab, like the slot does.
+    await page.reload();
+    await waitForBoard(page);
+    await expect(page.locator("#lockorder")).not.toBeChecked();
   });
 });
 
@@ -125,6 +193,8 @@ test.describe("search", () => {
     const league = await createLeague(request, "Gone league");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     const name = await markBySearch(page, "a");
     await expect.poll(() => onTheClock(page)).toBe(2);

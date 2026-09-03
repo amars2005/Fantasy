@@ -496,6 +496,19 @@ kbd {
   accent-color: var(--hot);
 }
 
+/* The pick-order lock is a normal setting, not a warning, and its label wraps
+   in a narrow rail -- so the box sits against the first line, not the middle. */
+.checkline.lock {
+  align-items: flex-start;
+  margin-top: 12px;
+  margin-bottom: 2px;
+}
+.checkline.lock input {
+  accent-color: var(--accent);
+  margin-top: 2px;
+  flex: none;
+}
+
 .newsread {
   font-size: 12px;
   line-height: 1.6;

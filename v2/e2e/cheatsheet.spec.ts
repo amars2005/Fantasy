@@ -8,7 +8,14 @@
 
 import { expect, test } from "@playwright/test";
 
-import { createLeague, markBySearch, onTheClock, superflex, waitForBoard } from "./helpers";
+import {
+  createLeague,
+  markBySearch,
+  onTheClock,
+  setPickOrderLock,
+  superflex,
+  waitForBoard,
+} from "./helpers";
 
 test.describe("cheatsheet", () => {
   test("downloads as a file from the board", async ({ page, request }) => {
@@ -94,6 +101,8 @@ test.describe("cheatsheet", () => {
     const league = await createLeague(request, "Live sheet");
     await page.goto(`/league/${league.id}`);
     await waitForBoard(page);
+    // Slot 1 picks first, so marking for the room is out of turn here.
+    await setPickOrderLock(page, false);
 
     const taken = await markBySearch(page, "a");
     await expect.poll(() => onTheClock(page)).toBe(2);

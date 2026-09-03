@@ -22,6 +22,61 @@ from src.features.schedule import add_playoff_lift
 from src.project.kdst import project_kdst
 
 
+ADP_TEAMS = 12
+"""The team count Fantasy Football Calculator's ADP is drawn from.
+
+Their API takes a ``teams`` parameter and ignores it -- verified 2026-08-30,
+``teams=12`` and ``teams=14`` return byte-identical ADP for all 271 players on
+every scoring format -- so there is exactly one ADP, and it is a 12-team one.
+"""
+
+
+def to_league_pick_space(board: pl.DataFrame, teams: int) -> pl.DataFrame:
+    """Re-express ADP in this league's pick numbers.
+
+    Mirrors ``toLeaguePickSpace`` in ``v2/lib/board.ts``; keep the two in step.
+
+    ADP is an *overall pick number*, and an overall pick number only means
+    something alongside a team count. The board compares it against pick numbers
+    from this league's snake, so a 12-team ADP read into a 14-team draft is two
+    different rulers held against each other.
+
+    The conversion is not uniform, because the two halves of a board are drafted
+    on different logic:
+
+    * A skill player's pick number is set by how many players are better than
+      him. Every team drafts skill players continuously from the first round, so
+      the 100th-best running back comes off around the 100th pick whatever the
+      league size. His ADP needs no adjustment.
+
+    * A kicker or a defence is drafted to fill a roster slot, in the last rounds,
+      once the starters are done. That is a *round*, not a rank -- and a round is
+      ``teams`` picks wide. In the 2026-08-29 snapshot the first defence goes at
+      82.1, round 7 of a 12-team draft; the same moment in a 14-team draft is
+      pick 96. So their pick numbers scale with team count.
+
+    Left uncorrected this is the bias you notice as the board pushing a defence
+    at you a round or two early in a big league: it has them coming off at pick
+    82 while the room is still four rounds from touching one, so they look
+    scarce, survival collapses and VONA spikes on a position worth almost
+    nothing. In an eight-team league the error runs the other way.
+    """
+    scale = teams / ADP_TEAMS
+    if scale == 1.0:
+        return board
+
+    late = pl.col("pos").is_in(["K", "DST"])
+    scaled = [
+        pl.when(late).then(pl.col(c) * scale).otherwise(pl.col(c)).alias(c)
+        for c in ("adp", "stdev", "adp_mu")
+        if c in board.columns
+    ]
+    # `stdev` scales with them: the spread is roughly a constant number of
+    # rounds, which is a growing number of picks. `adp_mu` is the calibrated
+    # latent mean in the same units, so it scales too.
+    return board.with_columns(scaled).sort("adp")
+
+
 class DraftBoard:
     def __init__(self, slot: int, projections: pl.DataFrame | None = None,
                  league: dict | None = None, resume: bool = True,
@@ -41,6 +96,8 @@ class DraftBoard:
         except Exception:
             pass
         board = add_calibrated_adp(add_tiers(add_vor(proj, self.league)))
+        # ADP arrives as a 12-team pick number; this league's snake is not.
+        board = to_league_pick_space(board, int(self.league["teams"]))
         try:
             # Weeks 15-17 decide the title, and ADP is format-blind so it cannot
             # price them. Positive lift means softer matchups exactly then.
