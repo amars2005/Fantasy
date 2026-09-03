@@ -217,6 +217,48 @@ lineup given what you already own. That makes the tool decline a third QB withou
 any hand-written rule, and prices the FLEX slot correctly. VONA subtracts the
 simulated expected best-available at that position when you next pick.
 
+### Pricing the bench: how many QBs, TEs, Ks and DSTs
+
+Nothing caps how many of a position you may draft. `position_max` in the config
+is a sanity check on the league shape, not a draft rule, and no code filters the
+board by it. What decides it is what a player who does *not* start is worth —
+and getting that wrong is visible at the table.
+
+It was wrong. A bench player used to be priced at a flat **20% of his raw
+projected points**, which pays a quarterback for being a quarterback: at pick 120
+a QB2 projecting 243 was worth 48.6 where the best bench back on the board was
+worth 23.8, so the board asked for a backup quarterback in round 9. The same
+mistake VOR exists to fix, left in the one place VOR was never applied.
+
+A bench player is insurance, so he is priced like insurance (`bench_model` in
+`src/draft/vona.py`, `benchModel` in `v2/lib/lineup.ts`):
+
+- **Over what you could stream, not over zero.** The baseline is replacement
+  level at his position *on the board as it stands*, so the QB2 above is
+  measured on what he beats a free quarterback by — 60 points, against a
+  quarterback pool eight rounds thinner — and not on his 243. Because the
+  baseline moves with the board it also keeps late fliers separated instead of
+  flattening them all to nothing.
+- **Times the slots he stands behind.** `BENCH_WEIGHT` (0.20) is what one
+  starting slot loses to a bye and injuries, so the cover a position needs is
+  0.20 per starting slot it fields — one for a QB, two-and-a-share-of-FLEX for a
+  back or receiver, as `allocate_flex` works it out for this year's pool.
+- **Split across the backups you already own.** Vacancies in a week are Poisson,
+  so your k-th backup starts in the weeks at least k slots are open. Behind one
+  starting slot that pays QB2 0.181 of a season, QB3 **0.018**, QB4 0.001 — the
+  "never draft a third quarterback" rule, derived rather than written down.
+
+Same board, same slot, same seeds, drafting purely on VONA: that same QB2 at
+pick 120 is now worth **10.8 rather than 48.6**, and three seeded drafts from
+slot 8 go from **2–3 quarterbacks to 1–2**, with the middle rounds they used to
+spend on a backup going to bench backs and receivers instead. A QB2 can still
+win a middle-round pick when quarterbacks are genuinely running out — but at a
+marginal of 10 you can see on the board that it is a marginal call.
+
+That leaves K and DST where they always were: the *first* one fills a starting
+slot and is worth full points, and since kickers are interchangeable the
+dropoff stays near zero until the end of the draft. Take them last.
+
 ## Strategy results (slot 8, 600 simulated drafts per policy)
 
 Scored the way the league is actually decided: fourteen head-to-head weeks, top
@@ -253,6 +295,14 @@ implied. What survives:
 
 **Playoff rate is the better metric.** It has less bracket noise in it than title
 rate, and it separates the policies more cleanly.
+
+These numbers predate the bench-pricing fix above and have not been re-measured:
+`title_eval.py` needs the full projection bundle and 600 drafts per policy. They
+compare *positional policies* against each other, and every policy in the table
+was run with the same lineup maths, so the ranking is not obviously affected —
+but the absolute rates would move, and the caps `title_eval.py` imposes on its
+drafting bots (`ROSTER_CAPS`, at most two QBs) exist to paper over exactly the
+bug that is now fixed.
 
 ## Kickers
 

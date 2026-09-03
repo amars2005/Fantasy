@@ -47,6 +47,7 @@ export interface GoldenFixture {
     games_raw: number;
   }[];
   replacement: Record<string, number>;
+  bench: Record<string, { vacancies: number; baseline: number }>;
   vor: { player_id: string; vor: number; vor_rank: number }[];
   tiers: {
     player_id: string;
@@ -56,7 +57,13 @@ export interface GoldenFixture {
     tier_points: number;
   }[];
   tier_counts: Record<string, number>;
-  lineups: { roster: { pos: string; proj_points: number }[]; points: number }[];
+  lineups: {
+    roster: { pos: string; proj_points: number }[];
+    /** Bench priced by the flat fallback: no model passed. */
+    points: number;
+    /** Bench priced by `benchModel`, which is what the board ranks by. */
+    bench_points: number;
+  }[];
   survival: {
     pick: number;
     n_sims: number;

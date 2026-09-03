@@ -46,7 +46,13 @@ from src.config import (
 from src.draft.replacement import add_vor, replacement_levels
 from src.draft.sim_draft import MIN_STDEV, survival_probability
 from src.draft.tiers import add_tiers
-from src.draft.vona import optimal_lineup_points
+from src.draft.vona import (
+    BENCH_WEIGHT,
+    BenchValue,
+    bench_model,
+    optimal_lineup_points,
+    promotion_weights,
+)
 from src.dst import (
     DST_EVENT_SCORING,
     POINTS_ALLOWED_BANDS,
@@ -398,9 +404,20 @@ def add_vor_ext(proj: pl.DataFrame, league: dict) -> pl.DataFrame:
     )
 
 
-def optimal_lineup_ext(roster: list[dict], league: dict) -> float:
+def bench_model_ext(proj: pl.DataFrame, league: dict) -> dict[str, BenchValue]:
+    counts = allocate_flex_ext(proj, league)
+    levels = replacement_levels_ext(proj, league)
+    return {
+        pos: BenchValue(BENCH_WEIGHT * counts.get(pos, 0) / league["teams"], level)
+        for pos, level in levels.items()
+    }
+
+
+def optimal_lineup_ext(
+    roster: list[dict], league: dict, bench: dict[str, BenchValue] | None = None
+) -> float:
     if not league["starters"].get("SUPERFLEX"):
-        return optimal_lineup_points(roster, league)
+        return optimal_lineup_points(roster, league, bench)
 
     starters = league["starters"]
     by_pos: dict[str, list[float]] = {}
@@ -433,10 +450,17 @@ def optimal_lineup_ext(roster: list[dict], league: dict) -> float:
             total += pts
             used[pos] = used.get(pos, 0) + 1
 
-    bench = [
-        pts for pos, lst in by_pos.items() for pts in lst[used.get(pos, 0):]
-    ]
-    return total + 0.20 * sum(bench)
+    for pos, lst in by_pos.items():
+        leftovers = lst[used.get(pos, 0):]
+        if not leftovers:
+            continue
+        if bench is None or pos not in bench:
+            total += BENCH_WEIGHT * sum(leftovers)
+            continue
+        vacancies, baseline = bench[pos]
+        for weight, pts in zip(promotion_weights(vacancies, len(leftovers)), leftovers):
+            total += weight * max(0.0, pts - baseline)
+    return total
 
 
 def _check_extension_is_noop(proj: pl.DataFrame, league: dict, name: str) -> None:
@@ -454,6 +478,8 @@ def _check_extension_is_noop(proj: pl.DataFrame, league: dict, name: str) -> Non
     ext_vor = add_vor_ext(proj, league).sort("player_id")["vor"].to_numpy()
     if not np.allclose(ref_vor, ext_vor, atol=0, rtol=0):
         raise SystemExit(f"{name}: the SUPERFLEX extension changed VOR values")
+    if bench_model(proj, league) != bench_model_ext(proj, league):
+        raise SystemExit(f"{name}: the SUPERFLEX extension changed the bench model")
 
 
 # --- fixture assembly -------------------------------------------------------
@@ -495,8 +521,16 @@ def build_fixture(cfg: dict) -> dict:
                    ("WR", 170.0), ("TE", 150.0), ("QB", 300.0), ("K", 120.0),
                    ("DST", 110.0), ("RB", 90.0)]),
     ]
+    # Both bench branches: the flat fallback a caller gets with no board, and
+    # the per-position model the board actually ranks by.
+    bench = bench_model_ext(valued, cfg["py"])
     lineups = [
-        {"roster": r, "points": optimal_lineup_ext(r, cfg["py"])} for r in rosters
+        {
+            "roster": r,
+            "points": optimal_lineup_ext(r, cfg["py"]),
+            "bench_points": optimal_lineup_ext(r, cfg["py"], bench),
+        }
+        for r in rosters
     ]
 
     # Survival: stochastic, so the test asserts distributionally. Uses the same
@@ -523,6 +557,10 @@ def build_fixture(cfg: dict) -> dict:
         ).to_dicts(),
         "replacement": {
             k: float(v) for k, v in replacement_levels_ext(valued, cfg["py"]).items()
+        },
+        "bench": {
+            pos: {"vacancies": value.vacancies, "baseline": value.baseline}
+            for pos, value in bench.items()
         },
         "vor": valued.select("player_id", "vor", "vor_rank").to_dicts(),
         "tiers": valued.select(
