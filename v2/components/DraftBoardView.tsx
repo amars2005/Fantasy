@@ -31,6 +31,89 @@ const cacheKey = (id: string) => `fantasy.v2.league.${id}`;
 const slotKey = (id: string) => `fantasy.v2.slot.${id}`;
 const newsKey = (id: string) => `fantasy.v2.news.${id}`;
 
+/**
+ * One number about a player, named once.
+ *
+ * The wide table and the phone card show the same seven quantities in the same
+ * order; deriving both from this list is what stops them drifting apart.
+ */
+interface StatCell {
+  key: string;
+  label: string;
+  value: string;
+  className?: string;
+}
+
+const tierLeft = (p: Player) => (p as Player & { tier_left?: number }).tier_left ?? 0;
+const byeConflicts = (p: Player) =>
+  (p as Player & { bye_conflicts?: number }).bye_conflicts ?? 0;
+
+const STAT_COLUMNS: {
+  key: string;
+  label: string;
+  value: (p: Player) => string;
+  className?: (p: Player) => string;
+}[] = [
+  { key: "tier", label: "Tier", value: (p) => String(p.tier ?? "-") },
+  {
+    key: "left",
+    label: "Left",
+    value: (p) => String(tierLeft(p)),
+    className: (p) => (tierLeft(p) <= 2 ? "scarce" : ""),
+  },
+  { key: "adp", label: "ADP", value: (p) => p.adp.toFixed(1) },
+  { key: "proj", label: "Proj", value: (p) => p.proj_points.toFixed(0) },
+  { key: "vona", label: "VONA", value: (p) => (p.vona ?? 0).toFixed(1), className: () => "vona" },
+  {
+    key: "survives",
+    label: "Survives",
+    value: (p) => `${((p.p_survives ?? 0) * 100).toFixed(0)}%`,
+  },
+  {
+    key: "bye",
+    label: "Bye",
+    value: (p) => String(p.bye ?? "-"),
+    className: (p) => (byeConflicts(p) ? "scarce" : ""),
+  },
+];
+
+const statsFor = (p: Player): StatCell[] =>
+  STAT_COLUMNS.map((c) => ({
+    key: c.key,
+    label: c.label,
+    value: c.value(p),
+    className: c.className?.(p),
+  }));
+
+/** The three buttons that follow a player everywhere he is offered. */
+function PickButtons({
+  playerId,
+  onNews,
+  onMark,
+}: {
+  playerId: string;
+  onNews: (id: string) => void;
+  onMark: (id: string, takenBy: "me" | "other") => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        title="Price in news the ADP snapshot has not caught"
+        onClick={() => onNews(playerId)}
+      >
+        News
+      </button>
+      <button type="button" onClick={() => onMark(playerId, "other")}>
+        Gone
+      </button>
+      <button type="button" className="mine" onClick={() => onMark(playerId, "me")}>
+        Mine
+      </button>
+    </>
+  );
+}
+
 /** Mirror the league locally so a dropped connection does not empty the board. */
 function readCache(id: string): LeaguePayload | null {
   try {
@@ -60,6 +143,13 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [fromCache, setFromCache] = useState(false);
+  /**
+   * Which cards have their numbers open, on a screen too narrow for the table.
+   * A phone shows the name and the two buttons that act on it; everything else
+   * is one tap away rather than eight columns of horizontal scroll.
+   */
+  const [openStats, setOpenStats] = useState<Record<string, boolean>>({});
+  const [allStats, setAllStats] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   /** Picks written optimistically but not yet acknowledged by the server. */
@@ -139,6 +229,10 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
     if (tag === null) setEditingNews((cur) => (cur === playerId ? null : cur));
   }, []);
 
+  const toggleStats = useCallback((playerId: string) => {
+    setOpenStats((prev) => ({ ...prev, [playerId]: !prev[playerId] }));
+  }, []);
+
   // --- board ----------------------------------------------------------------
 
   const active = useMemo(
@@ -214,7 +308,10 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
       pending.current.push(pick);
       void send(pick);
       setQuery("");
-      searchRef.current?.focus();
+      // Refocusing pulls the on-screen keyboard back up on a phone, which
+      // covers the board the moment a pick lands. Only do it where a physical
+      // keyboard is what marked the pick.
+      if (document.activeElement === searchRef.current) searchRef.current?.focus();
     },
     [picks, send],
   );
@@ -258,32 +355,27 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
     <>
       <header className="app">
         <h1>{league.name}</h1>
-        <div className="stat">
-          <b className={mine ? "onclock" : ""}>{recommendation.on_the_clock}</b>
-          <span>on the clock</span>
+        <div className="stats">
+          <div className="stat">
+            <b className={mine ? "onclock" : ""}>{recommendation.on_the_clock}</b>
+            <span>on the clock</span>
+          </div>
+          <div className="stat">
+            <b>{recommendation.my_next_pick ?? "-"}</b>
+            <span>my next pick</span>
+          </div>
+          <div className="stat">
+            <b>{recommendation.picks_until_next}</b>
+            <span>picks between mine</span>
+          </div>
+          <div className="stat">
+            <b>{recommendation.roster.length}</b>
+            <span>on my roster</span>
+          </div>
         </div>
-        <div className="stat">
-          <b>{recommendation.my_next_pick ?? "-"}</b>
-          <span>my next pick</span>
-        </div>
-        <div className="stat">
-          <b>{recommendation.picks_until_next}</b>
-          <span>picks between mine</span>
-        </div>
-        <div className="stat">
-          <b>{recommendation.roster.length}</b>
-          <span>on my roster</span>
-        </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          <label htmlFor="slot" style={{ margin: 0 }}>
-            Slot
-          </label>
-          <select
-            id="slot"
-            value={slot}
-            onChange={(e) => setSlot(Number(e.target.value))}
-            style={{ width: 70 }}
-          >
+        <div className="appctl">
+          <label htmlFor="slot">Slot</label>
+          <select id="slot" value={slot} onChange={(e) => setSlot(Number(e.target.value))}>
             {Array.from({ length: league.config.teams }, (_, i) => i + 1).map((s) => (
               <option key={s} value={s}>
                 {s}
@@ -297,7 +389,7 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
       </header>
 
       <main className="board">
-        <div>
+        <div className="col-search">
           <div className="panel">
             <h2>Mark a pick</h2>
             <div className="body">
@@ -306,7 +398,6 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                 type="search"
                 value={query}
                 placeholder="Type a name…"
-                autoFocus
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key !== "Enter" || !results.length) return;
@@ -314,33 +405,29 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
                   mark(results[0].player_id, e.shiftKey ? "me" : "other");
                 }}
               />
-              <div className="hint">
+              <div className="hint kbdhint">
                 <kbd>Enter</kbd> taken by someone else &middot;{" "}
                 <kbd>Shift</kbd>+<kbd>Enter</kbd> taken by me
               </div>
 
               {results.map((p) => (
-                <div className="slot" key={p.player_id}>
+                <div className="slot result" key={p.player_id}>
                   <span>
                     <span className={`pos ${p.pos}`}>{p.pos}</span>{" "}
                     <span className="name">{p.name}</span>{" "}
                     <span className="muted">{p.tm}</span> <NewsBadge player={p} />
                   </span>
-                  <span style={{ display: "flex", gap: 4 }}>
-                    <button type="button" onClick={() => setEditingNews(p.player_id)}>
-                      News
-                    </button>
-                    <button type="button" onClick={() => mark(p.player_id, "other")}>
-                      Gone
-                    </button>
-                    <button type="button" className="mine" onClick={() => mark(p.player_id, "me")}>
-                      Mine
-                    </button>
+                  <span className="acts">
+                    <PickButtons
+                      playerId={p.player_id}
+                      onNews={setEditingNews}
+                      onMark={mark}
+                    />
                   </span>
                 </div>
               ))}
 
-              <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+              <div className="markrow">
                 <button type="button" onClick={() => mark(null, "other")}>
                   Someone took a player not on the board
                 </button>
@@ -350,46 +437,9 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
               </div>
             </div>
           </div>
-
-          <NewsPanel
-            players={adjusted}
-            news={news}
-            editing={editingNews}
-            onEdit={setEditingNews}
-            onChange={setTag}
-          />
-
-          <div className="panel">
-            <h2>Recent picks</h2>
-            <div className="body">
-              {active.length === 0 && <div className="empty">Nothing yet.</div>}
-              {[...active]
-                .reverse()
-                .slice(0, 12)
-                .map((p) => {
-                  const player = league.board.find((b) => b.player_id === p.playerId);
-                  return (
-                    <div className="slot" key={p.seq}>
-                      <span className="lbl">{p.seq}</span>
-                      <span style={{ flex: 1, textAlign: "left", paddingLeft: 8 }}>
-                        {player ? (
-                          <>
-                            <span className={`pos ${player.pos}`}>{player.pos}</span>{" "}
-                            {player.name}
-                          </>
-                        ) : (
-                          <span className="empty">unidentified pick</span>
-                        )}
-                      </span>
-                      {p.takenBy === "me" && <span className="vona">mine</span>}
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
         </div>
 
-        <div>
+        <div className="col-main">
           {offline && (
             <div className="banner offline">
               Offline. Picks are being kept locally and will sync when the connection
@@ -443,69 +493,173 @@ export default function DraftBoardView({ leagueId }: { leagueId: string }) {
           </div>
 
           <div className="panel">
-            <h2>Ranked by value over next available</h2>
+            <h2 className="panelhead">
+              <span>Ranked by value over next available</span>
+              <button
+                type="button"
+                className="statstoggle"
+                aria-pressed={allStats}
+                onClick={() => {
+                  setAllStats((v) => !v);
+                  setOpenStats({});
+                }}
+              >
+                {allStats ? "Hide stats" : "All stats"}
+              </button>
+            </h2>
             <div className="tablewrap">
               <table>
                 <thead>
                   <tr>
                     <th>Player</th>
                     <th>Pos</th>
-                    <th className="num">Tier</th>
-                    <th className="num">Left</th>
-                    <th className="num">ADP</th>
-                    <th className="num">Proj</th>
-                    <th className="num">VONA</th>
-                    <th className="num">Survives</th>
-                    <th className="num">Bye</th>
+                    {STAT_COLUMNS.map((c) => (
+                      <th className="num" key={c.key}>
+                        {c.label}
+                      </th>
+                    ))}
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {recommendation.recommendations.map((p) => {
-                    const left = (p as Player & { tier_left?: number }).tier_left ?? 0;
-                    const conflicts =
-                      (p as Player & { bye_conflicts?: number }).bye_conflicts ?? 0;
-                    return (
-                      <tr key={p.player_id}>
-                        <td className="name">
-                          {p.name} <NewsBadge player={p} />
+                  {recommendation.recommendations.map((p) => (
+                    <tr key={p.player_id}>
+                      <td className="name">
+                        {p.name} <NewsBadge player={p} />
+                      </td>
+                      <td>
+                        <span className={`pos ${p.pos}`}>{p.pos}</span>
+                      </td>
+                      {statsFor(p).map((s) => (
+                        <td className={s.className} key={s.key}>
+                          {s.value}
                         </td>
-                        <td>
-                          <span className={`pos ${p.pos}`}>{p.pos}</span>
-                        </td>
-                        <td>{p.tier}</td>
-                        <td className={left <= 2 ? "scarce" : ""}>{left}</td>
-                        <td>{p.adp.toFixed(1)}</td>
-                        <td>{p.proj_points.toFixed(0)}</td>
-                        <td className="vona">{(p.vona ?? 0).toFixed(1)}</td>
-                        <td>{((p.p_survives ?? 0) * 100).toFixed(0)}%</td>
-                        <td className={conflicts ? "scarce" : ""}>{p.bye ?? "-"}</td>
-                        <td>
-                          <span style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                            <button
-                              type="button"
-                              title="Price in news the ADP snapshot has not caught"
-                              onClick={() => setEditingNews(p.player_id)}
-                            >
-                              News
-                            </button>
-                            <button type="button" onClick={() => mark(p.player_id, "other")}>
-                              Gone
-                            </button>
-                            <button
-                              type="button"
-                              className="mine"
-                              onClick={() => mark(p.player_id, "me")}
-                            >
-                              Mine
-                            </button>
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                      ))}
+                      <td>
+                        <span className="acts end">
+                          <PickButtons
+                            playerId={p.player_id}
+                            onNews={setEditingNews}
+                            onMark={mark}
+                          />
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
+            </div>
+
+            {/* The same ranking for a phone: the name, the two calls on it, and
+                the numbers behind a tap. Hidden wherever the table fits. */}
+            <ul className="cards">
+              {recommendation.recommendations.map((p, i) => {
+                const open = allStats || Boolean(openStats[p.player_id]);
+                const stats = statsFor(p);
+                const summary = stats.filter((s) =>
+                  ["vona", "tier", "left", "adp"].includes(s.key),
+                );
+                return (
+                  <li className="card" key={p.player_id}>
+                    <div className="cardhead">
+                      <span className="rank">{i + 1}</span>
+                      <span className={`pos ${p.pos}`}>{p.pos}</span>
+                      <span className="cardname">
+                        <span className="cardtitle">
+                          <span className="name">{p.name}</span>{" "}
+                          <span className="muted">{p.tm}</span> <NewsBadge player={p} />
+                        </span>
+                        <span className="cardmeta">
+                          {summary.map((s, n) => (
+                            <span key={s.key}>
+                              {n > 0 && " · "}
+                              {s.label} <b className={s.className}>{s.value}</b>
+                            </span>
+                          ))}
+                        </span>
+                      </span>
+                    </div>
+
+                    <div className="cardacts">
+                      <button type="button" onClick={() => mark(p.player_id, "other")}>
+                        Gone
+                      </button>
+                      <button
+                        type="button"
+                        className="mine"
+                        onClick={() => mark(p.player_id, "me")}
+                      >
+                        Mine
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        aria-expanded={open}
+                        onClick={() => toggleStats(p.player_id)}
+                      >
+                        {open ? "Less" : "Stats"}
+                      </button>
+                    </div>
+
+                    {open && (
+                      <div className="cardstats">
+                        {stats.map((s) => (
+                          <div className="cardstat" key={s.key}>
+                            <span className="lbl">{s.label}</span>
+                            <b className={s.className}>{s.value}</b>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          className="cardnews"
+                          onClick={() => setEditingNews(p.player_id)}
+                        >
+                          Price in news &amp; risk
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </div>
+
+        <div className="rail-left">
+          <NewsPanel
+            players={adjusted}
+            news={news}
+            editing={editingNews}
+            onEdit={setEditingNews}
+            onChange={setTag}
+          />
+
+          <div className="panel">
+            <h2>Recent picks</h2>
+            <div className="body">
+              {active.length === 0 && <div className="empty">Nothing yet.</div>}
+              {[...active]
+                .reverse()
+                .slice(0, 12)
+                .map((p) => {
+                  const player = league.board.find((b) => b.player_id === p.playerId);
+                  return (
+                    <div className="slot" key={p.seq}>
+                      <span className="lbl">{p.seq}</span>
+                      <span style={{ flex: 1, textAlign: "left", paddingLeft: 8 }}>
+                        {player ? (
+                          <>
+                            <span className={`pos ${player.pos}`}>{player.pos}</span>{" "}
+                            {player.name}
+                          </>
+                        ) : (
+                          <span className="empty">unidentified pick</span>
+                        )}
+                      </span>
+                      {p.takenBy === "me" && <span className="vona">mine</span>}
+                    </div>
+                  );
+                })}
             </div>
           </div>
         </div>
