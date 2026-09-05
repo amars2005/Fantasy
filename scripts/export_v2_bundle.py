@@ -161,16 +161,22 @@ def _pbp(seasons: list[int]) -> pl.DataFrame:
     by length, and the two defensive scores the team frame does not count -- so
     it is loaded once and shared.
 
-    Trimmed before caching, and not incidentally: play-by-play is 372 columns
-    wide and a decade of it is a big thing to keep on disk to answer questions
-    about fourteen of them.
+    Trimmed a season at a time, and not incidentally. Play-by-play is 372
+    columns wide and about 100 MB a season in memory, so asking for a decade of
+    it in one call would hold a gigabyte of mostly unwanted columns at once --
+    in a job that already describes its working set as the reason it cannot run
+    serverless. Loading and narrowing season by season keeps the peak at one
+    season and leaves roughly a megabyte on disk for the ten.
     """
     def load() -> pl.DataFrame:
-        df = nfl.load_pbp(seasons=seasons)
-        _guard(df, PBP_COLUMNS, "play-by-play")
-        if "season_type" in df.columns:
-            df = df.filter(pl.col("season_type") == "REG")
-        return df.select(PBP_COLUMNS)
+        frames = []
+        for season in seasons:
+            df = nfl.load_pbp(seasons=[season])
+            _guard(df, PBP_COLUMNS, f"play-by-play ({season})")
+            if "season_type" in df.columns:
+                df = df.filter(pl.col("season_type") == "REG")
+            frames.append(df.select(PBP_COLUMNS))
+        return pl.concat(frames, how="vertical_relaxed")
 
     return cached(f"pbp_{min(seasons)}_{max(seasons)}", load)
 
