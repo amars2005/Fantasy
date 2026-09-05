@@ -262,6 +262,67 @@ describe("ESPN, against a real league's scoring block", () => {
   it("names ids in words rather than as bare numbers", () => {
     expect(imported.unmapped.join(" ")).not.toMatch(/^statId 16 /);
   });
+
+  it("counts a single point in the singular", () => {
+    // "1 pts" on the one screen whose whole job is to be read carefully.
+    expect(imported.unmapped.join(" ")).not.toMatch(/\b1 pts\b/);
+    expect(imported.unmapped).toContain("50+ yard TD pass bonus — 1 pt (id 16)");
+    expect(imported.unmapped).toContain("50+ yard TD rush bonus — 0.5 pts (id 36)");
+    expect(imported.unmapped).toContain("2pt return — 2 pts (id 206)");
+  });
+
+  it("lists what needs checking in id order, so bonuses sit together", () => {
+    const ids = imported.unmapped.map((u) => Number(/id (\d+)/.exec(u)?.[1] ?? 0));
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+  });
+});
+
+/**
+ * The same live league, but pricing each kind of defensive touchdown apart --
+ * the case that used to charge every defensive score at the blocked-kick rate.
+ */
+describe("ESPN, when defensive touchdowns are priced by type", () => {
+  const imported = mapEspnLeague({
+    settings: {
+      scoringSettings: {
+        scoringItems: [
+          { statId: 103, points: 7 }, // interception return
+          { statId: 104, points: 7 }, // fumble return
+          { statId: 93, points: 10 }, // blocked kick return
+          { statId: 101, points: 8 }, // kickoff return
+          { statId: 102, points: 7 }, // punt return
+        ],
+      },
+    },
+  });
+
+  it("takes the value the defensive touchdown count is actually made of", () => {
+    // `def_tds` is interception and fumble returns; a blocked kick is neither
+    // the common case nor in the column, so 10 would overprice every defence.
+    expect(imported.config.dst.events.def_tds).toBe(7);
+  });
+
+  it("says which value it took and why", () => {
+    const note = imported.notes.join(" ");
+    expect(note).toMatch(/priced differently by type/);
+    expect(note).toMatch(/it used 7/);
+    expect(note).toMatch(/interception or fumble return/);
+  });
+
+  it("falls back to the highest when the league prices no defensive return", () => {
+    const returnsOnly = mapEspnLeague({
+      settings: {
+        scoringSettings: {
+          scoringItems: [
+            { statId: 101, points: 8 }, // kickoff return
+            { statId: 102, points: 6 }, // punt return
+          ],
+        },
+      },
+    });
+    expect(returnsOnly.config.dst.events.def_tds).toBe(8);
+    expect(returnsOnly.notes.join(" ")).toMatch(/the highest of them/);
+  });
 });
 
 describe("ESPN league ids", () => {

@@ -144,6 +144,20 @@ const RETURN_TD_IDS: Record<string, number[]> = {
   "punt return": [102, 105],
 };
 
+/**
+ * The kinds `def_tds` actually counts.
+ *
+ * nflverse puts a defence's own returns -- interceptions and fumbles -- in
+ * `def_tds`, and kick and punt returns in `special_teams_tds`, which ids 101
+ * and 102 already score on the returner's line. So when a league prices the
+ * kinds apart, the one number the board can carry should be what an
+ * interception or fumble return pays. Taking the largest of the five instead
+ * priced every defensive score at the rate of a blocked kick -- the rarest of
+ * them, and one the column does not even count -- which overstated defences by
+ * a few points a season in any league that pays a return premium.
+ */
+const DEF_TD_KINDS = ["interception return", "fumble return"];
+
 /** statId -> [low, high] for the points-allowed ladder. */
 const PA_BAND_IDS: [number, number, number][] = [
   [89, 0, 0], [90, 1, 6], [91, 7, 13], [92, 14, 17], [121, 18, 21],
@@ -205,9 +219,16 @@ const STAT_LABELS: Record<number, string> = {
   213: "receiving first down", 214: "FG made yards", 215: "FG missed yards",
 };
 
-function describeStat(statId: number, points: number): string {
+/** "1 pt", "2 pts", "0.5 pts" -- these lists are read, so they should read. */
+function pointsLabel(value: number): string {
+  return `${value} ${Math.abs(value) === 1 ? "pt" : "pts"}`;
+}
+
+function describeStat(statId: number, value: number): string {
   const label = STAT_LABELS[statId];
-  return label ? `${label} — ${points} pts (id ${statId})` : `statId ${statId} (${points} pts)`;
+  return label
+    ? `${label} — ${pointsLabel(value)} (id ${statId})`
+    : `statId ${statId} (${pointsLabel(value)})`;
 }
 
 /** ESPN lineup slot id -> our slot. */
@@ -322,7 +343,12 @@ export function mapEspnLeague(raw: EspnSettings): EspnImport {
     for (const key of keys) into[key] = (into[key] ?? 0) + points;
   };
 
-  for (const item of items) {
+  // ESPN returns its items in engine order, which reaches the review screen as
+  // a jumble -- a passing bonus, a safety, a rushing bonus. Ids run in football
+  // order, so walking them sorted keeps a league's bonuses next to each other.
+  const sorted = [...items].sort((a, b) => a.statId - b.statId);
+
+  for (const item of sorted) {
     const { statId } = item;
     const points = generic.get(statId) ?? 0;
 
@@ -363,13 +389,19 @@ export function mapEspnLeague(raw: EspnSettings): EspnImport {
   }
   if (tdValues.size) {
     const distinct = [...new Set(tdValues.values())];
-    dstEvents.def_tds = Math.max(...distinct);
+    const counted = DEF_TD_KINDS.filter((k) => tdValues.has(k)).map((k) => tdValues.get(k)!);
+    dstEvents.def_tds = Math.max(...(counted.length ? counted : distinct));
     if (distinct.length > 1) {
       const detail = [...tdValues.entries()].map(([kind, v]) => `${kind} ${v}`).join(", ");
       notes.push(
         `Defensive touchdowns are priced differently by type in your league ` +
           `(${detail}). The board carries one value per defensive touchdown, so ` +
-          `it used ${dstEvents.def_tds}.`,
+          `it used ${dstEvents.def_tds}` +
+          (counted.length
+            ? ` — what an interception or fumble return pays, which is what the ` +
+              `defensive touchdown count is made of. Kickoff and punt returns are ` +
+              `scored separately, on the returner's own line.`
+            : `, the highest of them.`),
       );
     }
   }

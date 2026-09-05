@@ -123,8 +123,9 @@ export default function LeagueForm({
       {ignored && ignored.length > 0 && (
         <details style={{ marginBottom: 12 }}>
           <summary className="hint" style={{ cursor: "pointer" }}>
-            {ignored.length} more rules your league leaves at zero — they change
-            nothing, but you can check the list.
+            {ignored.length === 1
+              ? "1 more rule your league leaves at zero — it changes nothing, but you can check it."
+              : `${ignored.length} more rules your league leaves at zero — they change nothing, but you can check the list.`}
           </summary>
           <p className="hint">{ignored.join(" · ")}</p>
         </details>
