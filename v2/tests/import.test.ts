@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { mapEspnLeague, normaliseLeagueId } from "../lib/import/espn";
 import { mapSleeperLeague } from "../lib/import/sleeper";
-import { nearestFfcFormat } from "../lib/config";
+import { nearestFfcFormat, ruleLabel } from "../lib/config";
 
 describe("Sleeper", () => {
   const raw = {
@@ -83,6 +83,17 @@ describe("Sleeper", () => {
 
   it("reports keys it could not place instead of dropping them", () => {
     expect(imported.unmapped).toContain("some_future_key");
+  });
+
+  it("scores Sleeper's long-touchdown bonuses across the bands they cover", () => {
+    const withBonus = mapSleeperLeague({
+      ...raw,
+      scoring_settings: { ...raw.scoring_settings, rec_td_40p: 1, rec_td_50p: 2 },
+    });
+    // 40+ covers both bands; 50+ adds to the longer one only.
+    expect(withBonus.config.scoring.receiving_td_40_49).toBe(1);
+    expect(withBonus.config.scoring.receiving_td_50_).toBe(3);
+    expect(withBonus.unmapped).not.toContain("rec_td_50p");
   });
 
   it("anchors a half-PPR league to the half-PPR board", () => {
@@ -249,31 +260,110 @@ describe("ESPN, against a real league's scoring block", () => {
     expect(imported.config.dst.events.def_fg_blocks).toBe(0);
   });
 
-  it("separates rules worth points from rules worth nothing", () => {
-    // Only the five genuine bonuses need a person's attention.
-    expect(imported.unmapped).toHaveLength(5);
-    expect(imported.unmapped.join(" ")).toMatch(/50\+ yard TD pass bonus/);
-    expect(imported.unmapped.join(" ")).toMatch(/1pt safety/);
-    // The 0-point entries are reported, but separately and quietly.
-    expect(imported.ignored.join(" ")).toMatch(/fumble forced/);
-    expect(imported.unmapped.join(" ")).not.toMatch(/fumble forced/);
+  it("scores the long-touchdown bonuses instead of giving up on them", () => {
+    // This is the whole point of the play-by-play components: every one of
+    // these used to be reported as "worth points here, but the board cannot
+    // score them", and the projections ran low for exactly the players who
+    // earn them.
+    expect(imported.config.scoring.passing_td_50_).toBe(1);
+    expect(imported.config.scoring.rushing_td_50_).toBe(0.5);
+    expect(imported.config.scoring.receiving_td_50_).toBe(1);
   });
 
-  it("names ids in words rather than as bare numbers", () => {
-    expect(imported.unmapped.join(" ")).not.toMatch(/^statId 16 /);
+  it("does not pay a 50+ bonus on a touchdown shorter than 50 yards", () => {
+    expect(imported.config.scoring.passing_td_40_49 ?? 0).toBe(0);
+    expect(imported.config.scoring.receiving_td_20_29 ?? 0).toBe(0);
+  });
+
+  it("scores the returned two-point try and the one-point safety", () => {
+    expect(imported.config.dst.events.def_two_point_returns).toBe(2);
+    expect(imported.config.dst.events.def_one_point_safeties).toBe(1);
+  });
+
+  it("has nothing left it cannot score", () => {
+    // The five entries this league used to surface are all scored now, so the
+    // warning banner does not appear at all.
+    expect(imported.unmapped).toEqual([]);
+    // The 0-point entries are still reported, separately and quietly.
+    expect(imported.ignored.join(" ")).toMatch(/fumble forced/);
+  });
+});
+
+/**
+ * The cumulative case, which is the one that is easy to get wrong.
+ *
+ * ESPN's bonuses are counters: a 55-yard touchdown trips the 40+ rule and the
+ * 50+ rule together. The bundle stores each touchdown in one disjoint band, so
+ * the coarse rule has to be spread across the bands it covers or the longest
+ * scores quietly lose their 40+ points.
+ */
+describe("ESPN long-touchdown bonuses, when the bands overlap", () => {
+  const imported = mapEspnLeague({
+    settings: {
+      scoringSettings: {
+        scoringItems: [
+          { statId: 15, points: 2 }, // 40+ yard TD pass
+          { statId: 16, points: 3 }, // 50+ yard TD pass, on top of the 40+
+          { statId: 178, points: 1 }, // 30-39 yard TD pass, an exact band
+        ],
+      },
+    },
+  });
+
+  it("pays both rules on a touchdown long enough to trip both", () => {
+    // 40-49 yards trips only the 40+ rule.
+    expect(imported.config.scoring.passing_td_40_49).toBe(2);
+    // 50+ trips both, so it is worth the sum.
+    expect(imported.config.scoring.passing_td_50_).toBe(5);
+  });
+
+  it("leaves an exact band exactly where ESPN put it", () => {
+    expect(imported.config.scoring.passing_td_30_39).toBe(1);
+    expect(imported.config.scoring.passing_td_20_29 ?? 0).toBe(0);
+  });
+
+  it("reports none of them as unscoreable", () => {
+    expect(imported.unmapped).toEqual([]);
+  });
+});
+
+/**
+ * The reporting itself, on a league whose leftovers really are unmappable.
+ */
+describe("ESPN, reporting what is genuinely left over", () => {
+  const imported = mapEspnLeague({
+    settings: {
+      scoringSettings: {
+        scoringItems: [
+          { statId: 108, points: 1 }, // solo tackles: IDP, no home here
+          { statId: 22, points: 0.5 }, // passing yards per game
+          { statId: 58, points: 2 }, // receiving target
+          { statId: 106, points: 0 }, // worth nothing, so merely noted
+        ],
+      },
+    },
   });
 
   it("counts a single point in the singular", () => {
     // "1 pts" on the one screen whose whole job is to be read carefully.
     expect(imported.unmapped.join(" ")).not.toMatch(/\b1 pts\b/);
-    expect(imported.unmapped).toContain("50+ yard TD pass bonus — 1 pt (id 16)");
-    expect(imported.unmapped).toContain("50+ yard TD rush bonus — 0.5 pts (id 36)");
-    expect(imported.unmapped).toContain("2pt return — 2 pts (id 206)");
+    expect(imported.unmapped).toContain("solo tackles — 1 pt (id 108)");
+    expect(imported.unmapped).toContain("passing yards per game — 0.5 pts (id 22)");
+    expect(imported.unmapped).toContain("receiving target — 2 pts (id 58)");
   });
 
-  it("lists what needs checking in id order, so bonuses sit together", () => {
+  it("lists what needs checking in id order, so like rules sit together", () => {
     const ids = imported.unmapped.map((u) => Number(/id (\d+)/.exec(u)?.[1] ?? 0));
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
+  });
+
+  it("names ids in words rather than as bare numbers", () => {
+    expect(imported.unmapped.join(" ")).not.toMatch(/statId /);
+  });
+
+  it("keeps rules worth nothing out of the list that needs eyes", () => {
+    expect(imported.ignored.join(" ")).toMatch(/fumble forced/);
+    expect(imported.unmapped.join(" ")).not.toMatch(/fumble forced/);
   });
 });
 
@@ -340,5 +430,20 @@ describe("ESPN league ids", () => {
 
   it("rejects a string with no id in it, rather than letting ESPN 400", () => {
     expect(() => normaliseLeagueId("my league")).toThrow(/does not look like/i);
+  });
+});
+
+describe("rule labels", () => {
+  it("reads out a banded key rather than showing its column name", () => {
+    expect(ruleLabel("receiving_td_50_")).toBe("receiving TD, 50+ yds");
+    expect(ruleLabel("passing_td_30_39")).toBe("passing TD, 30-39 yds");
+    // The trailing underscore of an open-ended band used to leak out as a
+    // stray space: "fg made 60 ".
+    expect(ruleLabel("fg_made_60_")).toBe("FG made, 60+ yds");
+    expect(ruleLabel("fg_missed_40_49")).toBe("FG missed, 40-49 yds");
+  });
+
+  it("leaves a key it has nothing better to say about alone", () => {
+    expect(ruleLabel("def_sacks")).toBe("def sacks");
   });
 });

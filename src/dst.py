@@ -25,6 +25,17 @@ DST_EVENT_SCORING = {
     "def_tds": 6.0,
 }
 
+# Two defensive scores nflverse's team frame does not count, and this league
+# does not pay -- but ESPN prices both, so a league that imports from it needs
+# the columns to exist. Derived from the same play-by-play pass that produces
+# the long-touchdown bands; see `scripts/export_v2_bundle.py`.
+#
+# They are rare to the point of being almost theoretical: two defensive
+# two-point returns league-wide across 2022-24, and no one-point safety at all.
+# Carrying them costs a column each and means the import screen can stop
+# warning about a bonus whose true contribution is zero.
+DST_PBP_EVENTS = ("def_two_point_returns", "def_one_point_safeties")
+
 POINTS_ALLOWED_BANDS = [
     (0, 0, 5.0), (1, 6, 4.0), (7, 13, 3.0), (14, 17, 1.0),
     (18, 27, 0.0), (28, 34, -1.0), (35, 45, -3.0), (46, 999, -5.0),

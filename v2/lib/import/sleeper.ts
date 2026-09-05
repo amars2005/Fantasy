@@ -8,7 +8,7 @@
  * rather than a silently wrong draft board.
  */
 
-import { REFERENCE_LEAGUE } from "../config";
+import { REFERENCE_LEAGUE, tdBandsFromLow } from "../config";
 import type { Band, LeagueConfig, Position, Slot } from "../types";
 
 const API = "https://api.sleeper.app/v1/league";
@@ -33,6 +33,25 @@ const SCORING_MAP: Record<string, string> = {
   kr_td: "special_teams_tds",
   pr_td: "pt_return_tds",
   fum_rec_td: "fumble_recovery_tds",
+};
+
+/**
+ * Long-touchdown bonuses -> the bundle's banded touchdown columns.
+ *
+ * Sleeper offers only the two cumulative thresholds, with the `p` suffix it
+ * uses elsewhere for "or more" (`fgm_60p` above). It has no 40-49 bucket, so
+ * "40+" has to mean every band from 40 up, and a league setting both 40+ and
+ * 50+ pays both on a 55-yard score -- the same arrangement ESPN uses. That
+ * reading is an assumption about a league that sets both thresholds; a league
+ * setting one, which is the ordinary case, is unambiguous either way.
+ */
+const LONG_TD_MAP: Record<string, string[]> = {
+  pass_td_40p: tdBandsFromLow("passing", 40),
+  pass_td_50p: tdBandsFromLow("passing", 50),
+  rush_td_40p: tdBandsFromLow("rushing", 40),
+  rush_td_50p: tdBandsFromLow("rushing", 50),
+  rec_td_40p: tdBandsFromLow("receiving", 40),
+  rec_td_50p: tdBandsFromLow("receiving", 50),
 };
 
 const KICKER_MAP: Record<string, string> = {
@@ -126,7 +145,10 @@ export function mapSleeperLeague(raw: SleeperLeague): SleeperImport {
 
   for (const [key, value] of Object.entries(settings)) {
     if (SCORING_MAP[key]) scoring[SCORING_MAP[key]] = value;
-    else if (KICKER_MAP[key]) kicker[KICKER_MAP[key]] = value;
+    else if (LONG_TD_MAP[key]) {
+      // Overlapping thresholds accumulate, so these add rather than replace.
+      for (const band of LONG_TD_MAP[key]) scoring[band] = (scoring[band] ?? 0) + value;
+    } else if (KICKER_MAP[key]) kicker[KICKER_MAP[key]] = value;
     else if (DST_MAP[key]) dstEvents[DST_MAP[key]] = value;
     else if (!key.startsWith("pts_allow") && !key.startsWith("yds_allow")) {
       unmapped.push(key);

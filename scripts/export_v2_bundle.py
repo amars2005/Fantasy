@@ -38,13 +38,16 @@ import polars as pl
 from src.config import (
     FUMBLE_LOST_COLUMNS,
     KICKER_SCORING,
+    LONG_TD_COMPONENTS,
     ROOT,
     SCORING,
     SEASON,
     SKILL_POSITIONS,
+    TD_LENGTH_BANDS,
+    td_band_key,
 )
 from src.draft.sim_draft import MIN_STDEV, calibrate
-from src.dst import DST_EVENT_SCORING, weekly_dst_points
+from src.dst import DST_EVENT_SCORING, DST_PBP_EVENTS, weekly_dst_points
 from src.ingest import nflverse as nv
 from src.ingest.adp import load_adp
 from src.ingest.cache import cache_path, cached
@@ -72,10 +75,15 @@ FFC_TEAMS_PARAM = 12
 # Politeness delay between uncached FFC requests.
 FFC_DELAY_S = 1.0
 
-# The stat components a scoring vector can reference. Everything in SCORING
-# except `fumbles_lost`, which nflverse splits across three columns.
+# The stat components a scoring vector can reference.
+#
+# `COMPONENT_STATS` is what nflverse's weekly frame carries under its own names
+# -- everything in SCORING except `fumbles_lost`, which nflverse splits across
+# three columns. `LONG_TD_COMPONENTS` is derived from play-by-play instead, and
+# is exported whether or not the reference league pays a long-touchdown bonus:
+# the bundle is built once and every imported league scores against it.
 COMPONENT_STATS = tuple(k for k in SCORING if k != "fumbles_lost")
-ALL_COMPONENTS = list(COMPONENT_STATS) + ["fumbles_lost"]
+ALL_COMPONENTS = list(COMPONENT_STATS) + ["fumbles_lost"] + list(LONG_TD_COMPONENTS)
 
 
 class ExportError(RuntimeError):
@@ -133,6 +141,130 @@ def _round_floats(df: pl.DataFrame, places: int = 2) -> pl.DataFrame:
 # --- stat components --------------------------------------------------------
 
 
+# The play-by-play columns the two derivations below need, guarded for the same
+# reason the nflverse ones are: a rename would otherwise produce a column of
+# zeros, and a bonus nobody earns looks exactly like a bonus no league pays.
+LONG_TD_COLUMNS = (
+    "pass_touchdown", "rush_touchdown", "yards_gained",
+    "passer_player_id", "rusher_player_id", "receiver_player_id",
+    "lateral_rusher_player_id", "lateral_receiver_player_id",
+)
+DST_PBP_COLUMNS = ("defensive_two_point_conv", "safety", "two_point_attempt", "defteam")
+PBP_COLUMNS = ("season", "week", *LONG_TD_COLUMNS, *DST_PBP_COLUMNS)
+
+
+def _pbp(seasons: list[int]) -> pl.DataFrame:
+    """Regular-season play-by-play, trimmed to the columns this export needs.
+
+    The only part of the export that needs plays rather than nflverse's
+    pre-aggregated weekly frames. Two things come out of it -- touchdowns banded
+    by length, and the two defensive scores the team frame does not count -- so
+    it is loaded once and shared.
+
+    Trimmed before caching, and not incidentally: play-by-play is 372 columns
+    wide and a decade of it is a big thing to keep on disk to answer questions
+    about fourteen of them.
+    """
+    def load() -> pl.DataFrame:
+        df = nfl.load_pbp(seasons=seasons)
+        _guard(df, PBP_COLUMNS, "play-by-play")
+        if "season_type" in df.columns:
+            df = df.filter(pl.col("season_type") == "REG")
+        return df.select(PBP_COLUMNS)
+
+    return cached(f"pbp_{min(seasons)}_{max(seasons)}", load)
+
+
+# Which play flags a touchdown of each kind, and who nflverse credits with it.
+#
+# The lateral column matters: on a touchdown scored after a lateral, nflverse's
+# weekly `receiving_tds` credits the player who took the lateral, not the man
+# the pass was thrown to. Crediting the original receiver here would leave the
+# banded counts disagreeing with the base touchdown count they are a bonus on
+# top of -- three plays a season, but a player would be paid a long-touchdown
+# bonus for a touchdown the base rule gave to somebody else.
+TD_KINDS = {
+    "passing": ("pass_touchdown", "passer_player_id", None),
+    "rushing": ("rush_touchdown", "rusher_player_id", "lateral_rusher_player_id"),
+    "receiving": ("pass_touchdown", "receiver_player_id", "lateral_receiver_player_id"),
+}
+
+# The weekly column each kind's bands must add up to.
+TD_TOTALS = {
+    "passing": "passing_tds",
+    "rushing": "rushing_tds",
+    "receiving": "receiving_tds",
+}
+
+
+def _band_count(low: int, high: int | None) -> pl.Expr:
+    """Plays whose yardage falls in [low, high]; `high` of None means open."""
+    cond = pl.col("yards_gained") >= low
+    if high is not None:
+        cond = cond & (pl.col("yards_gained") <= high)
+    return cond.cast(pl.Int32).sum()
+
+
+def long_td_components(seasons: list[int]) -> pl.DataFrame:
+    """Per player-season touchdown counts, banded by the length of the play.
+
+    Disjoint bands, not the cumulative "40+" and "50+" the platforms price. A
+    coarse platform rule is expanded across every band it spans on import, so
+    the bundle stores each touchdown exactly once and overlapping rules still
+    both get paid -- the same arrangement the kicker distance bands use.
+    """
+    pbp = _pbp(seasons)
+
+    frames = []
+    for kind, (flag, primary, lateral) in TD_KINDS.items():
+        scorer = (
+            pl.coalesce([pl.col(lateral), pl.col(primary)]) if lateral else pl.col(primary)
+        )
+        frames.append(
+            pbp.filter(pl.col(flag) == 1)
+            .with_columns(scorer.alias("player_id"))
+            .filter(pl.col("player_id").is_not_null())
+            .group_by(["player_id", "season"])
+            .agg(*[
+                _band_count(low, high).alias(td_band_key(kind, low, high))
+                for low, high in TD_LENGTH_BANDS
+            ])
+        )
+
+    out = frames[0]
+    for frame in frames[1:]:
+        out = out.join(frame, on=["player_id", "season"], how="full", coalesce=True)
+    return out.with_columns(
+        pl.col("season").cast(pl.Int32),
+        *[pl.col(c).fill_null(0).cast(pl.Int32) for c in LONG_TD_COMPONENTS],
+    )
+
+
+def _reconcile_long_tds(components: pl.DataFrame) -> None:
+    """Check the bands add up to nflverse's own touchdown totals.
+
+    The counterpart to `_guard` for the one block of components this export
+    derives itself. A play-by-play schema change -- a renamed flag, a dropped
+    lateral column -- would not raise here on its own; it would quietly produce
+    bands that no longer sum to the touchdowns everybody agrees the player
+    scored, and the bonus would be wrong in a way no projection looks odd for.
+    So it is checked rather than trusted.
+    """
+    for kind, total in TD_TOTALS.items():
+        banded = sum(
+            components[td_band_key(kind, low, high)].sum()
+            for low, high in TD_LENGTH_BANDS
+        )
+        counted = components[total].sum()
+        if banded != counted:
+            raise ExportError(
+                f"long touchdowns: the {kind} bands sum to {banded} but nflverse "
+                f"counts {counted} {total}. The play-by-play derivation and the "
+                "weekly totals disagree, so the bonus would be scored against a "
+                "touchdown count nothing else in the bundle shares."
+            )
+
+
 def build_stat_components(seasons: list[int]) -> pl.DataFrame:
     """Per player-season sums of every raw stat the scoring rules reference."""
     weekly = nv.player_stats(seasons=seasons, level="week")
@@ -147,7 +279,7 @@ def build_stat_components(seasons: list[int]) -> pl.DataFrame:
         [pl.col(c).fill_null(0) for c in FUMBLE_LOST_COLUMNS]
     ).alias("fumbles_lost")
 
-    return (
+    seasonal = (
         weekly.with_columns(fumbles)
         .group_by(["player_id", "season"])
         .agg(
@@ -158,6 +290,16 @@ def build_stat_components(seasons: list[int]) -> pl.DataFrame:
         )
         .filter(pl.col("stat_pos").is_in(SKILL_POSITIONS))
     )
+
+    # A skill player with no touchdown of a given kind simply has no row in the
+    # play-by-play frame, so a left join and a zero fill is the whole story.
+    joined = seasonal.join(
+        long_td_components(seasons), on=["player_id", "season"], how="left"
+    ).with_columns(
+        *[pl.col(c).fill_null(0).cast(pl.Int32) for c in LONG_TD_COMPONENTS]
+    )
+    _reconcile_long_tds(joined)
+    return joined
 
 
 # --- training frames --------------------------------------------------------
@@ -242,6 +384,35 @@ def export_kicker_components(out: Path, seasons: list[int]) -> None:
            out, "kicker_components")
 
 
+def dst_pbp_events(seasons: list[int]) -> pl.DataFrame:
+    """Per team-game counts of the two defensive scores the team frame omits.
+
+    Both are credited to the defending team on the play. The two-point return is
+    rare but real -- twice league-wide across 2022-24. The one-point safety is
+    rarer than that: it has not happened once in the seasons this bundle covers,
+    so the column is all zeros and the attribution below is, honestly, untested.
+    It is carried anyway because a league that prices it should be told its
+    projections are complete rather than warned they run low, and a rule that
+    never fires contributes exactly nothing either way.
+    """
+    pbp = _pbp(seasons)
+
+    two_point = pl.col("defensive_two_point_conv") == 1
+    one_point_safety = (pl.col("safety") == 1) & (pl.col("two_point_attempt") == 1)
+    return (
+        pbp.filter(pl.col("defteam").is_not_null())
+        .group_by([
+            pl.col("season").cast(pl.Int32),
+            pl.col("week").cast(pl.Int32),
+            pl.col("defteam").alias("team"),
+        ])
+        .agg(
+            two_point.cast(pl.Int32).sum().alias("def_two_point_returns"),
+            one_point_safety.cast(pl.Int32).sum().alias("def_one_point_safeties"),
+        )
+    )
+
+
 def export_dst_components(out: Path, seasons: list[int]) -> None:
     """Per team-game defensive events, points allowed and yards allowed.
 
@@ -259,6 +430,10 @@ def export_dst_components(out: Path, seasons: list[int]) -> None:
         pl.col("week").cast(pl.Int32),
         "team",
         *[pl.col(c).fill_null(0).alias(c) for c in DST_EVENT_SCORING],
+    ).join(
+        dst_pbp_events(seasons), on=["season", "week", "team"], how="left"
+    ).with_columns(
+        *[pl.col(c).fill_null(0).cast(pl.Int32) for c in DST_PBP_EVENTS]
     )
     # `weekly_dst_points` already derives points/yards allowed from the
     # opponent's own row. Reuse it read-only rather than duplicating that join.
@@ -270,7 +445,7 @@ def export_dst_components(out: Path, seasons: list[int]) -> None:
     ).sort(["season", "week", "team"])
 
     _write(_columnar(_round_floats(frame, 1), "dst_components", seasons=seasons,
-                     events=list(DST_EVENT_SCORING)),
+                     events=list(DST_EVENT_SCORING) + list(DST_PBP_EVENTS)),
            out, "dst_components")
 
 

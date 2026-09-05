@@ -2,7 +2,14 @@
 
 import { useMemo, useState } from "react";
 
-import { anchorWarnings, nearestFfcFormat, REFERENCE_LEAGUE } from "../lib/config";
+import {
+  ALL_SCORING_KEYS,
+  anchorWarnings,
+  DST_PBP_EVENTS,
+  nearestFfcFormat,
+  REFERENCE_LEAGUE,
+  ruleLabel,
+} from "../lib/config";
 import type { LeagueConfig, Position, Slot } from "../lib/types";
 
 const SLOTS: Slot[] = ["QB", "RB", "WR", "TE", "FLEX", "SUPERFLEX", "K", "DST"];
@@ -78,6 +85,20 @@ export default function LeagueForm({
         [which]: config.dst[which].map((b, i) => (i === index ? { ...b, points } : b)),
       },
     });
+
+  // Every rule the board can score, not merely the ones this league already
+  // has a number for. A league entered by hand starts from the reference
+  // league's rules, which do not include the long-touchdown bonuses -- without
+  // this there is no way to type one in.
+  const advancedScoringKeys = useMemo(() => {
+    const keys = [...new Set([...Object.keys(config.scoring), ...ALL_SCORING_KEYS])];
+    return keys.filter((k) => !HEADLINE_SCORING.some((h) => h.key === k));
+  }, [config.scoring]);
+
+  const dstEventKeys = useMemo(
+    () => [...new Set([...Object.keys(config.dst.events), ...DST_PBP_EVENTS])],
+    [config.dst.events],
+  );
 
   const starterCount = Object.values(config.starters).reduce((a, b) => a + (b ?? 0), 0);
 
@@ -263,20 +284,18 @@ export default function LeagueForm({
 
           {showAdvanced && (
             <div className="grid2" style={{ marginTop: 12 }}>
-              {Object.keys(config.scoring)
-                .filter((k) => !HEADLINE_SCORING.some((h) => h.key === k))
-                .map((key) => (
-                  <div className="field" key={key}>
-                    <label htmlFor={`adv-${key}`}>{key.replace(/_/g, " ")}</label>
-                    <input
-                      id={`adv-${key}`}
-                      type="number"
-                      step="0.01"
-                      value={config.scoring[key]}
-                      onChange={(e) => setScoring(key, Number(e.target.value))}
-                    />
-                  </div>
-                ))}
+              {advancedScoringKeys.map((key) => (
+                <div className="field" key={key}>
+                  <label htmlFor={`adv-${key}`}>{ruleLabel(key)}</label>
+                  <input
+                    id={`adv-${key}`}
+                    type="number"
+                    step="0.01"
+                    value={config.scoring[key] ?? 0}
+                    onChange={(e) => setScoring(key, Number(e.target.value))}
+                  />
+                </div>
+              ))}
             </div>
           )}
 
@@ -312,7 +331,7 @@ export default function LeagueForm({
               <div className="grid2">
                 {Object.keys(config.kickerScoring).map((key) => (
                   <div className="field" key={key}>
-                    <label htmlFor={`k-${key}`}>{key.replace(/_/g, " ")}</label>
+                    <label htmlFor={`k-${key}`}>{ruleLabel(key)}</label>
                     <input
                       id={`k-${key}`}
                       type="number"
@@ -326,14 +345,14 @@ export default function LeagueForm({
 
               <h3 style={{ fontSize: 13, margin: "16px 0 8px" }}>Defensive events</h3>
               <div className="grid2">
-                {Object.keys(config.dst.events).map((key) => (
+                {dstEventKeys.map((key) => (
                   <div className="field" key={key}>
-                    <label htmlFor={`d-${key}`}>{key.replace(/_/g, " ")}</label>
+                    <label htmlFor={`d-${key}`}>{ruleLabel(key)}</label>
                     <input
                       id={`d-${key}`}
                       type="number"
                       step="0.01"
-                      value={config.dst.events[key]}
+                      value={config.dst.events[key] ?? 0}
                       onChange={(e) => setDstEvent(key, Number(e.target.value))}
                     />
                   </div>

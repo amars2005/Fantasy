@@ -69,6 +69,41 @@ SCORING = {
     "fumble_recovery_tds": 6.0,        # fumble recovered for TD (FTD)
 }
 
+# --- components no league of ours scores, but some league does ---------------
+#
+# Everything above is *this* league's rules, and until now the bundle carried
+# exactly the stat columns those rules name. That is why an imported league
+# whose settings included a long-touchdown bonus was told the board could not
+# score it: the column simply was not there to multiply.
+#
+# The vocabulary a bundle carries and the rules one league happens to pay are
+# different things. These are the extra columns, carried for every player
+# whether or not the reference league pays them, so that an imported league can.
+#
+# Touchdowns banded by the length of the scoring play. Both ESPN and Sleeper
+# price these, and both treat them as *counters that sum*: a 55-yard touchdown
+# trips "40+ yard TD" and "50+ yard TD" together, so a coarse rule pays every
+# band it spans. The bands here are therefore the finest either platform
+# offers, and a coarser rule is expanded across them on import -- the same
+# treatment `KICKER_SCORING`'s distance bands already get.
+#
+# Unlike every other component these are not in nflverse's weekly frames; they
+# are derived from play-by-play in `scripts/export_v2_bundle.py`, which is also
+# where the derivation is reconciled against nflverse's own touchdown totals.
+TD_LENGTH_BANDS = ((0, 9), (10, 19), (20, 29), (30, 39), (40, 49), (50, None))
+
+
+def td_band_key(kind: str, low: int, high: int | None) -> str:
+    """`passing_td_40_49`, `receiving_td_50_` -- matching the kicker bands."""
+    return f"{kind}_td_{low}_{'' if high is None else high}"
+
+
+LONG_TD_COMPONENTS = tuple(
+    td_band_key(kind, low, high)
+    for kind in ("passing", "rushing", "receiving")
+    for low, high in TD_LENGTH_BANDS
+)
+
 # The subset nflverse's `fantasy_points_ppr` also computes. Used to cross-check
 # the scoring engine against a reference; the league extras above are deliberate
 # divergences from it, not bugs.

@@ -33,7 +33,7 @@
  * their browser. Public leagues need nothing.
  */
 
-import { REFERENCE_LEAGUE } from "../config";
+import { REFERENCE_LEAGUE, tdBandsFromLow, tdExactBand } from "../config";
 import type { Band, LeagueConfig, Position, Slot } from "../types";
 
 const HOST = "https://lm-api-reads.fantasy.espn.com";
@@ -115,6 +115,33 @@ const KICKER_STAT_MAP: Record<number, string[]> = {
 };
 
 /**
+ * Long-touchdown bonuses -> the bundle's banded touchdown columns.
+ *
+ * ESPN prices these two ways at once. Ids 175-186 name an exact band (0-9,
+ * 10-19, 20-29, 30-39); ids 15/35/45 mean "40 or more" and 16/36/46 mean "50 or
+ * more". They are counters like everything else here, so a 55-yard touchdown
+ * pays the 40+ rule *and* the 50+ rule, and a league that sets both owes both.
+ *
+ * The bundle stores each touchdown in exactly one disjoint band, so a
+ * cumulative rule is expanded across every band it covers and the sums come
+ * out right -- the same treatment ESPN's coarse field-goal buckets get above.
+ */
+const LONG_TD_STAT_MAP: Record<number, string[]> = {
+  // Passing.
+  175: tdExactBand("passing", 0), 176: tdExactBand("passing", 10),
+  177: tdExactBand("passing", 20), 178: tdExactBand("passing", 30),
+  15: tdBandsFromLow("passing", 40), 16: tdBandsFromLow("passing", 50),
+  // Rushing.
+  179: tdExactBand("rushing", 0), 180: tdExactBand("rushing", 10),
+  181: tdExactBand("rushing", 20), 182: tdExactBand("rushing", 30),
+  35: tdBandsFromLow("rushing", 40), 36: tdBandsFromLow("rushing", 50),
+  // Receiving.
+  183: tdExactBand("receiving", 0), 184: tdExactBand("receiving", 10),
+  185: tdExactBand("receiving", 20), 186: tdExactBand("receiving", 30),
+  45: tdBandsFromLow("receiving", 40), 46: tdBandsFromLow("receiving", 50),
+};
+
+/**
  * Defensive events that map onto bundle columns.
  *
  * 97 is ESPN's single "blocked punt, PAT or FG" rule; the bundle scores those
@@ -126,6 +153,15 @@ const DST_STAT_MAP: Record<number, string[]> = {
   97: ["def_punt_blocks", "def_pat_blocks", "def_fg_blocks"],
   98: ["def_safeties"],
   99: ["def_sacks"],
+  // A returned two-point try and a safety on a try. Both are scored by the
+  // defending team, and 206/209 are the generic ids most leagues actually set.
+  // The "offensive" variants (204, 207) are left to surface as unmapped: they
+  // pay a player rather than a defence, and guessing which would be worse than
+  // saying so.
+  205: ["def_two_point_returns"],
+  206: ["def_two_point_returns"],
+  208: ["def_one_point_safeties"],
+  209: ["def_one_point_safeties"],
 };
 
 /**
@@ -358,6 +394,11 @@ export function mapEspnLeague(raw: EspnSettings): EspnImport {
       const key = STAT_MAP[statId];
       if (Math.abs(points) >= Math.abs(scoring[key] ?? 0)) scoring[key] = points;
     }
+    if (LONG_TD_STAT_MAP[statId]) {
+      // Cumulative rules overlap by design, so these add rather than replace:
+      // a league paying both 40+ and 50+ owes both on a 55-yard score.
+      add(scoring, LONG_TD_STAT_MAP[statId], points);
+    }
     if (KICKER_STAT_MAP[statId]) {
       add(kicker, KICKER_STAT_MAP[statId], forKicker.get(statId) ?? points);
     }
@@ -367,6 +408,7 @@ export function mapEspnLeague(raw: EspnSettings): EspnImport {
 
     const handled =
       STAT_MAP[statId] !== undefined ||
+      LONG_TD_STAT_MAP[statId] !== undefined ||
       KICKER_STAT_MAP[statId] !== undefined ||
       DST_STAT_MAP[statId] !== undefined ||
       bandIds.has(statId) ||

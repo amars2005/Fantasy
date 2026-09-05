@@ -28,6 +28,99 @@ export const PPR_SCORING: Record<string, number> = {
 };
 
 /**
+ * Rules the reference league does not pay, but an imported one might.
+ *
+ * Mirrors `TD_LENGTH_BANDS` / `LONG_TD_COMPONENTS` and `DST_PBP_EVENTS` in the
+ * Python config. These are deliberately *not* in `PPR_SCORING`: the reference
+ * league does not pay a long-touchdown bonus, and writing it in at zero would
+ * claim a rule it does not have. They are listed here so an import can set
+ * them and a manual entry can reach them, and the bundle carries the matching
+ * stat columns either way.
+ *
+ * Both platforms treat a long-touchdown bonus as a counter, so a 55-yard score
+ * trips "40+" and "50+" together. The bands below are disjoint and a coarser
+ * platform rule is expanded across every band it spans, which is why the
+ * bundle can store each touchdown once and still pay both rules.
+ */
+export const TD_LENGTH_BANDS: [number, number | null][] = [
+  [0, 9], [10, 19], [20, 29], [30, 39], [40, 49], [50, null],
+];
+
+export function tdBandKey(kind: string, low: number, high: number | null): string {
+  return `${kind}_td_${low}_${high ?? ""}`;
+}
+
+export const LONG_TD_KINDS = ["passing", "rushing", "receiving"] as const;
+
+/**
+ * The bands a cumulative platform rule covers.
+ *
+ * "40+ yard TD" is not one of our bands; it is every band from 40 up. Spreading
+ * it out is what lets the bundle store each touchdown exactly once while a
+ * league that sets both a 40+ and a 50+ rule still gets paid for both.
+ */
+export function tdBandsFromLow(kind: string, low: number): string[] {
+  return TD_LENGTH_BANDS.filter(([bandLow]) => bandLow >= low).map(([bandLow, high]) =>
+    tdBandKey(kind, bandLow, high),
+  );
+}
+
+/** The single band starting exactly at `low`, for a rule naming one outright. */
+export function tdExactBand(kind: string, low: number): string[] {
+  const band = TD_LENGTH_BANDS.find(([bandLow]) => bandLow === low);
+  if (!band) throw new Error(`no touchdown band starts at ${low}`);
+  return [tdBandKey(kind, band[0], band[1])];
+}
+
+export const LONG_TD_COMPONENTS: string[] = LONG_TD_KINDS.flatMap((kind) =>
+  TD_LENGTH_BANDS.map(([low, high]) => tdBandKey(kind, low, high)),
+);
+
+/** Defensive scores nflverse's team frame does not count. See `src/dst.py`. */
+export const DST_PBP_EVENTS = ["def_two_point_returns", "def_one_point_safeties"];
+
+const LONG_TD_LABELS: Record<string, string> = Object.fromEntries(
+  LONG_TD_KINDS.flatMap((kind) =>
+    TD_LENGTH_BANDS.map(([low, high]) => [
+      tdBandKey(kind, low, high),
+      `${kind} TD, ${high === null ? `${low}+` : `${low}-${high}`} yds`,
+    ]),
+  ),
+);
+
+const EVENT_LABELS: Record<string, string> = {
+  def_two_point_returns: "two-point try returned",
+  def_one_point_safeties: "one-point safety",
+};
+
+/**
+ * A scoring or event key as a person reads it.
+ *
+ * The raw keys are nflverse column names, and `receiving_td_50_` with the
+ * underscores swapped for spaces is not something anyone should have to
+ * decode on a review screen.
+ */
+export function ruleLabel(key: string): string {
+  const banded = LONG_TD_LABELS[key] ?? EVENT_LABELS[key];
+  if (banded) return banded;
+
+  // `fg_made_60_` and friends: a trailing underscore is an open-ended band, and
+  // swapping underscores for spaces leaves it as a stray space at the end.
+  const fg = /^fg_(made|missed)_(\d+)_(\d*)$/.exec(key);
+  if (fg) {
+    const [, kind, low, high] = fg;
+    return `FG ${kind}, ${high ? `${low}-${high}` : `${low}+`} yds`;
+  }
+  return key.replace(/_/g, " ");
+}
+
+/** Every scoring key a league may set, whether or not the reference one does. */
+export const ALL_SCORING_KEYS: string[] = [
+  ...Object.keys(PPR_SCORING),
+  ...LONG_TD_COMPONENTS,
+];
+
+/**
  * Kicker scoring, banded by distance. The reference league goes further than
  * most: it pays a sixth point at 60+ yards where the common default stops at
  * 50+. Every miss costs a point at any distance.
